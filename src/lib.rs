@@ -26,6 +26,10 @@ The picker (plain `cuser`) also offers \"+ Import ~/.claude\" whenever a
 default ~/.claude exists, and \"+ New profile\" to log into a brand-new account.
 Highlighting an existing profile in the picker also offers `d` to delete it
 and `r` to rename it.
+
+Launching a profile also points ~/.claude and ~/.claude.json at it (via
+symlinks), so `claude` run directly afterward uses that same account. If
+~/.claude already exists as a real directory, run `cuser import <name>` first.
 ";
 
 pub fn run() -> Result<()> {
@@ -52,6 +56,9 @@ pub fn run() -> Result<()> {
         "--update" | "update" => update::run(),
         name => {
             profiles::validate_profile_name(name)?;
+            if !profiles::profile_exists(name)? {
+                profiles::check_default_available()?;
+            }
             let created = profiles::ensure_profile(name)?;
             if created {
                 eprintln!("Creating new profile: {name}");
@@ -65,6 +72,7 @@ fn run_picker() -> Result<()> {
     match tui::run_picker()? {
         Some(tui::PickResult::Existing(name)) => launch_profile(&name, &[]),
         Some(tui::PickResult::New(name)) => {
+            profiles::check_default_available()?;
             profiles::create_profile(&name)?;
             eprintln!("Creating new profile: {name}");
             launch_profile(&name, &[])
@@ -79,6 +87,7 @@ fn run_picker() -> Result<()> {
 }
 
 fn launch_profile(name: &str, args: &[String]) -> Result<()> {
+    profiles::activate_profile(name)?;
     let dir = profiles::profile_dir(name)?;
     launch::launch_claude(&dir, args)
 }

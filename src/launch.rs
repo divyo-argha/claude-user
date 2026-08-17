@@ -11,7 +11,6 @@ pub fn launch_claude(profile_dir: &Path, args: &[String]) -> Result<()> {
     {
         use std::os::unix::process::CommandExt;
         let err = cmd.exec();
-        // exec() only returns on failure.
         Err(err).context("failed to launch `claude` (is it installed and on PATH?)")
     }
 
