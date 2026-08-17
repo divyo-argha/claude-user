@@ -2,9 +2,6 @@ use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Command;
 
-/// Launch `claude` with CLAUDE_CONFIG_DIR pointed at the given profile directory,
-/// forwarding any extra args. On Unix this replaces the current process image;
-/// on Windows it spawns a child and propagates its exit code.
 pub fn launch_claude(profile_dir: &Path, args: &[String]) -> Result<()> {
     let mut cmd = Command::new("claude");
     cmd.env("CLAUDE_CONFIG_DIR", profile_dir);

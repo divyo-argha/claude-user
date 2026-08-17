@@ -20,8 +20,10 @@ pub fn default_claude_dir() -> Result<PathBuf> {
     Ok(home.join(".claude"))
 }
 
-/// A profile name must be safe to use as a single path component: no separators,
-/// no leading dot, no "..".
+pub fn can_import() -> Result<bool> {
+    Ok(default_claude_dir()?.exists())
+}
+
 pub fn validate_profile_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("profile name cannot be empty");
@@ -65,7 +67,6 @@ pub fn profile_exists(name: &str) -> Result<bool> {
     Ok(profile_dir(name)?.exists())
 }
 
-/// Recursively copy `src` into `dst`, overwriting existing files.
 fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     if src.is_dir() {
         fs::create_dir_all(dst)?;
@@ -82,23 +83,20 @@ fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copy every entry under `shared/` into the given profile directory, overwriting.
 pub fn sync_profile(name: &str) -> Result<()> {
     let shared = shared_dir()?;
-    let dest = profile_dir(name)?;
     if !shared.exists() {
         return Ok(());
     }
+    let dest = profile_dir(name)?;
     fs::create_dir_all(&dest)?;
     for entry in fs::read_dir(&shared)? {
         let entry = entry?;
-        let target = dest.join(entry.file_name());
-        copy_recursive(&entry.path(), &target)?;
+        copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
     }
     Ok(())
 }
 
-/// Copy shared/ into every existing profile.
 pub fn sync_all() -> Result<Vec<String>> {
     let names = list_profiles()?;
     for name in &names {
@@ -107,16 +105,13 @@ pub fn sync_all() -> Result<Vec<String>> {
     Ok(names)
 }
 
-/// Create a brand new, empty profile directory and sync shared config into it.
 pub fn create_profile(name: &str) -> Result<()> {
     validate_profile_name(name)?;
-    let dir = profile_dir(name)?;
-    fs::create_dir_all(&dir)?;
+    fs::create_dir_all(profile_dir(name)?)?;
     sync_profile(name)?;
     Ok(())
 }
 
-/// Ensure a profile exists, creating it (with sync) if it doesn't.
 pub fn ensure_profile(name: &str) -> Result<bool> {
     validate_profile_name(name)?;
     if profile_exists(name)? {
@@ -127,13 +122,15 @@ pub fn ensure_profile(name: &str) -> Result<bool> {
     }
 }
 
-/// Import the existing ~/.claude directory as the first profile named `name`.
-/// Moves account-specific state, and copies settings.json into shared/.
-pub fn migrate_existing(name: &str) -> Result<()> {
+/// Moves the default ~/.claude (whatever account is currently logged into it)
+/// into a new profile, splitting settings.json out into shared/. Works any time
+/// ~/.claude exists, not just on first run, so re-logging into the default
+/// location is always a valid way to bring in another account.
+pub fn import_default(name: &str) -> Result<()> {
     validate_profile_name(name)?;
     let claude_dir = default_claude_dir()?;
     if !claude_dir.exists() {
-        bail!("no existing ~/.claude directory found to migrate");
+        bail!("no existing ~/.claude directory found to import");
     }
     let dest = profile_dir(name)?;
     if dest.exists() {
@@ -142,20 +139,12 @@ pub fn migrate_existing(name: &str) -> Result<()> {
 
     let shared = shared_dir()?;
     fs::create_dir_all(&shared)?;
-    fs::create_dir_all(profiles_root()?)?;
-
     fs::rename(&claude_dir, &dest)?;
 
     let settings_src = dest.join("settings.json");
     if settings_src.exists() {
-        let settings_shared = shared.join("settings.json");
-        fs::copy(&settings_src, &settings_shared)?;
+        fs::copy(&settings_src, shared.join("settings.json"))?;
     }
     sync_profile(name)?;
     Ok(())
-}
-
-/// True if no profiles have been set up yet, but a plain ~/.claude exists to import.
-pub fn needs_migration() -> Result<bool> {
-    Ok(!profiles_root()?.exists() && default_claude_dir()?.exists())
 }
