@@ -48,6 +48,19 @@
 
 ---
 
+## 📋 Prerequisites
+
+Before getting started, make sure you have installed the official **Claude Code** CLI:
+
+```bash
+npm install -g @anthropic-ai/claude-code
+```
+
+> [!NOTE]
+> `claude-user` is a helper to switch account environments; it does not replace or install the `claude` command itself.
+
+---
+
 ## 🚀 Quick Onboarding
 
 Get up and running with multiple profiles in under a minute:

@@ -16,10 +16,23 @@ function resolveBinary() {
   const pkgName = PLATFORMS[key];
 
   if (!pkgName) {
+    const isWindows = process.platform === 'win32';
+    const instructions = isWindows
+      ? `1. Install Rust by downloading and running: https://rustup.rs/\n` +
+        `2. Build and install the tool via PowerShell/Command Prompt:\n` +
+        `   git clone https://github.com/divyo-argha/claude-user.git\n` +
+        `   cd claude-user\n` +
+        `   cargo install --path .`
+      : `1. Install Rust:\n` +
+        `   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh\n` +
+        `2. Build and install the tool:\n` +
+        `   git clone https://github.com/divyo-argha/claude-user.git\n` +
+        `   cd claude-user\n` +
+        `   cargo install --path .`;
+
     throw new Error(
-      `claude-user does not ship a prebuilt binary for ${process.platform}/${process.arch}.\n` +
-        `Supported platforms: ${Object.keys(PLATFORMS).join(', ')}.\n` +
-        `You can build from source instead: https://github.com/divyo-argha/claude-user#-install`
+      `claude-user does not ship a prebuilt binary for ${process.platform}/${process.arch}.\n\n` +
+      `To build and install from source, follow these steps:\n\n${instructions}`
     );
   }
 
