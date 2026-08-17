@@ -67,6 +67,23 @@ pub fn profile_exists(name: &str) -> Result<bool> {
     Ok(profile_dir(name)?.exists())
 }
 
+#[cfg(unix)]
+fn harden(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn harden(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn create_private_dir(path: &Path) -> Result<()> {
+    fs::create_dir_all(path)?;
+    harden(path)
+}
+
 fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
     if src.is_dir() {
         fs::create_dir_all(dst)?;
@@ -89,7 +106,7 @@ pub fn sync_profile(name: &str) -> Result<()> {
         return Ok(());
     }
     let dest = profile_dir(name)?;
-    fs::create_dir_all(&dest)?;
+    create_private_dir(&dest)?;
     for entry in fs::read_dir(&shared)? {
         let entry = entry?;
         copy_recursive(&entry.path(), &dest.join(entry.file_name()))?;
@@ -107,7 +124,8 @@ pub fn sync_all() -> Result<Vec<String>> {
 
 pub fn create_profile(name: &str) -> Result<()> {
     validate_profile_name(name)?;
-    fs::create_dir_all(profile_dir(name)?)?;
+    create_private_dir(&profiles_root()?)?;
+    create_private_dir(&profile_dir(name)?)?;
     sync_profile(name)?;
     Ok(())
 }
@@ -137,9 +155,12 @@ pub fn import_default(name: &str) -> Result<()> {
         bail!("profile \"{name}\" already exists");
     }
 
+    create_private_dir(&profiles_root()?)?;
     let shared = shared_dir()?;
-    fs::create_dir_all(&shared)?;
+    create_private_dir(&shared)?;
+
     fs::rename(&claude_dir, &dest)?;
+    harden(&dest)?;
 
     let settings_src = dest.join("settings.json");
     if settings_src.exists() {
