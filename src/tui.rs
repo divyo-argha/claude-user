@@ -35,6 +35,12 @@ enum Mode {
     Naming { action: Action, buffer: String },
 }
 
+enum Item {
+    Profile { name: String, display: String },
+    ImportDefault,
+    NewProfile,
+}
+
 pub fn run_picker() -> Result<Option<PickResult>> {
     let items = build_items()?;
 
@@ -51,16 +57,29 @@ pub fn run_picker() -> Result<Option<PickResult>> {
     result
 }
 
-fn build_items() -> Result<Vec<String>> {
-    let mut items = profiles::list_profiles()?;
-    if profiles::can_import()? {
-        items.push(IMPORT_DEFAULT.to_string());
+fn build_items() -> Result<Vec<Item>> {
+    let mut items = Vec::new();
+    for name in profiles::list_profiles()? {
+        let info = profiles::get_profile_info(&name).unwrap_or(profiles::ProfileInfo {
+            name: name.clone(),
+            email: None,
+            org_name: None,
+        });
+        let display = match (info.email, info.org_name) {
+            (Some(email), Some(org)) => format!("{name}  ({email} • {org})"),
+            (Some(email), None) => format!("{name}  ({email})"),
+            (None, _) => name.clone(),
+        };
+        items.push(Item::Profile { name, display });
     }
-    items.push(NEW_PROFILE.to_string());
+    if profiles::can_import()? {
+        items.push(Item::ImportDefault);
+    }
+    items.push(Item::NewProfile);
     Ok(items)
 }
 
-fn event_loop(terminal: &mut CuserTerminal, items: Vec<String>) -> Result<Option<PickResult>> {
+fn event_loop(terminal: &mut CuserTerminal, items: Vec<Item>) -> Result<Option<PickResult>> {
     let mut list_state = ListState::default();
     list_state.select(Some(0));
     let mut mode = Mode::Picking;
@@ -93,15 +112,15 @@ fn event_loop(terminal: &mut CuserTerminal, items: Vec<String>) -> Result<Option
                     }
                 }
                 KeyCode::Enter => {
-                    let selected = items[list_state.selected().unwrap_or(0)].as_str();
+                    let selected = &items[list_state.selected().unwrap_or(0)];
                     match selected {
-                        NEW_PROFILE => {
+                        Item::NewProfile => {
                             mode = Mode::Naming { action: Action::New, buffer: String::new() }
                         }
-                        IMPORT_DEFAULT => {
+                        Item::ImportDefault => {
                             mode = Mode::Naming { action: Action::Import, buffer: String::new() }
                         }
-                        name => return Ok(Some(PickResult::Existing(name.to_string()))),
+                        Item::Profile { name, .. } => return Ok(Some(PickResult::Existing(name.clone()))),
                     }
                     error = None;
                 }
@@ -134,7 +153,7 @@ fn event_loop(terminal: &mut CuserTerminal, items: Vec<String>) -> Result<Option
     }
 }
 
-fn draw(f: &mut Frame, items: &[String], state: &mut ListState, mode: &Mode, error: &Option<String>) {
+fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error: &Option<String>) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -150,7 +169,14 @@ fn draw(f: &mut Frame, items: &[String], state: &mut ListState, mode: &Mode, err
 
     let list_items: Vec<ListItem> = items
         .iter()
-        .map(|n| ListItem::new(Line::from(Span::raw(n.clone()))))
+        .map(|item| {
+            let text = match item {
+                Item::Profile { display, .. } => display.as_str(),
+                Item::ImportDefault => IMPORT_DEFAULT,
+                Item::NewProfile => NEW_PROFILE,
+            };
+            ListItem::new(Line::from(Span::raw(text.to_string())))
+        })
         .collect();
     let list = List::new(list_items)
         .block(Block::default().borders(Borders::ALL).title("Profiles"))

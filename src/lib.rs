@@ -1,6 +1,6 @@
-mod launch;
-mod profiles;
-mod tui;
+pub mod launch;
+pub mod profiles;
+pub mod tui;
 
 use anyhow::Result;
 use std::io::{self, Write};
@@ -21,7 +21,7 @@ The picker (plain `cuser`) also offers \"+ Import ~/.claude\" whenever a
 default ~/.claude exists, and \"+ New profile\" to log into a brand-new account.
 ";
 
-fn main() -> Result<()> {
+pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.is_empty() {
@@ -75,7 +75,12 @@ fn cmd_list() -> Result<()> {
         println!("No profiles yet. Run `cuser <name>` to create one.");
     } else {
         for name in names {
-            println!("{name}");
+            let info = profiles::get_profile_info(&name)?;
+            match (info.email, info.org_name) {
+                (Some(email), Some(org)) => println!("{name}  ({email} • {org})"),
+                (Some(email), None) => println!("{name}  ({email})"),
+                (None, _) => println!("{name}"),
+            }
         }
     }
     Ok(())
