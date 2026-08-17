@@ -6,7 +6,7 @@ use crossterm::terminal::{
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
@@ -221,34 +221,89 @@ fn event_loop(terminal: &mut CuserTerminal, mut items: Vec<Item>) -> Result<Opti
 }
 
 fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error: &Option<String>) {
+    let logo_color_1 = Color::Rgb(217, 119, 87);
+    let logo_color_2 = Color::Rgb(148, 163, 184);
+    let border_color = Color::Rgb(71, 85, 105);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(4),
             Constraint::Length(3),
-            Constraint::Min(3),
+            Constraint::Min(5),
             Constraint::Length(3),
         ])
         .split(f.area());
 
-    let title = Paragraph::new("↑/↓ move · Enter select · d delete · r rename · q quit")
-        .block(Block::default().borders(Borders::ALL).title("cuser — Claude account switcher"));
-    f.render_widget(title, chunks[0]);
+    let logo = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("  ░█▀▀░█░░░█▀█░█░█░█▀▄░█▀▀", Style::default().fg(logo_color_1)),
+            Span::styled("░░░░░█░█░█▀▀░█▀▀░█▀▄", Style::default().fg(logo_color_2)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ░█░░░█░░░█▀█░█░█░█░█░█▀▀", Style::default().fg(logo_color_1)),
+            Span::styled("░▄▄▄░█░█░▀▀█░█▀▀░█▀▄", Style::default().fg(logo_color_2)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀░░▀▀▀", Style::default().fg(logo_color_1)),
+            Span::styled("░░░░░▀▀▀░▀▀▀░▀▀▀░▀░▀", Style::default().fg(logo_color_2)),
+        ]),
+    ]);
+    f.render_widget(logo, chunks[0]);
+
+    let keybindings_info = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled(" ↑/↓ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Navigate  |  "),
+            Span::styled(" Enter ↵ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Select & Launch  |  "),
+            Span::styled(" r ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Rename  |  "),
+            Span::styled(" d ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Delete  |  "),
+            Span::styled(" q / Esc ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Quit"),
+        ])
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color))
+            .title(Span::styled(" KEYBINDINGS ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)))
+    );
+    f.render_widget(keybindings_info, chunks[1]);
 
     let list_items: Vec<ListItem> = items
         .iter()
-        .map(|item| {
+        .enumerate()
+        .map(|(idx, item)| {
             let text = match item {
                 Item::Profile { display, .. } => display.as_str(),
                 Item::ImportDefault => IMPORT_DEFAULT,
                 Item::NewProfile => NEW_PROFILE,
             };
-            ListItem::new(Line::from(Span::raw(text.to_string())))
+            let is_selected = state.selected() == Some(idx);
+            let prefix = if is_selected { " ▶ " } else { "   " };
+            let style = if is_selected {
+                Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(logo_color_1)),
+                Span::styled(text.to_string(), style),
+            ]))
         })
         .collect();
+
     let list = List::new(list_items)
-        .block(Block::default().borders(Borders::ALL).title("Profiles"))
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    f.render_stateful_widget(list, chunks[1], state);
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
+                .title(Span::styled(" PROFILES ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)))
+        );
+    f.render_stateful_widget(list, chunks[2], state);
 
     let bottom_text = match mode {
         Mode::Picking => error
@@ -269,6 +324,19 @@ fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error
             format!("Delete profile \"{name}\"? This removes its stored login. [y/N]")
         }
     };
-    let bottom = Paragraph::new(bottom_text).block(Block::default().borders(Borders::ALL));
-    f.render_widget(bottom, chunks[2]);
+    
+    let bottom_style = if error.is_some() {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default()
+    };
+
+    let bottom = Paragraph::new(Line::from(Span::styled(bottom_text, bottom_style)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color))
+                .title(Span::styled(" STATUS ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)))
+        );
+    f.render_widget(bottom, chunks[3]);
 }

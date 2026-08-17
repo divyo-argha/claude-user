@@ -46,9 +46,30 @@ mkdir -p "$BIN_DIR"
 install -m 755 "$tmpdir/claude-user" "$BIN_DIR/claude-user"
 install -m 755 "$tmpdir/cuser" "$BIN_DIR/cuser"
 
-echo "Installed claude-user and cuser to $BIN_DIR"
+ORANGE='\033[38;5;208m'
+SLATE='\033[38;5;244m'
+GREEN='\033[1;32m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+printf "\n"
+printf "${ORANGE}░█▀▀░█░░░█▀█░█░█░█▀▄░█▀▀${SLATE}░░░░░█░█░█▀▀░█▀▀░█▀▄${NC}\n"
+printf "${ORANGE}░█░░░█░░░█▀█░█░█░█░█░█▀▀${SLATE}░▄▄▄░█░█░▀▀█░█▀▀░█▀▄${NC}\n"
+printf "${ORANGE}░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀░░▀▀▀${SLATE}░░░░░▀▀▀░▀▀▀░▀▀▀░▀░▀${NC}\n\n"
+
+VERSION_STR=$("$BIN_DIR/cuser" --version 2>/dev/null | awk '{print $2}')
+if [ -z "$VERSION_STR" ]; then
+    VERSION_STR="0.1.0"
+fi
+printf "${GREEN}✓ Installed claude-user v${VERSION_STR} successfully!${NC}\n"
+printf "  Location: ${BOLD}$BIN_DIR${NC}\n\n"
 
 case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *) echo "Note: $BIN_DIR is not on your PATH — add it in your shell profile." ;;
+    *":$BIN_DIR:"*)
+        printf "Run ${BOLD}cuser${NC} to get started.\n"
+        ;;
+    *)
+        printf "Note: ${BOLD}$BIN_DIR${NC} is not on your PATH.\n"
+        printf "Please add it to your shell profile to run ${BOLD}cuser${NC}.\n"
+        ;;
 esac

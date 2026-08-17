@@ -2,7 +2,7 @@
 name = "claude-user"
 version = "0.1.0"
 edition = "2024"
-default-run = "cuser"
+default-run = "claude-user"
 
 [dependencies]
 anyhow = "1.0.104"

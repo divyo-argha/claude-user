@@ -29,6 +29,9 @@
   "engines": {
     "node": ">=14"
   },
+  "scripts": {
+    "postinstall": "node bin/postinstall.js"
+  },
   "os": [
     "linux",
     "darwin"

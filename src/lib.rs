@@ -7,29 +7,29 @@ use anyhow::{anyhow, bail, Result};
 use std::io::{self, Write};
 
 const HELP: &str = "\
-cuser / claude-user — switch between Claude accounts
+claude-user — switch between Claude accounts (alias: cuser)
 
 USAGE:
-    cuser                    open the interactive profile picker
-    cuser <profile>          launch that profile directly (created if new)
-    cuser <profile> [args]   launch that profile, passing [args] to `claude`
-    cuser list | -l          list existing profiles
-    cuser sync               copy shared config into every existing profile
-    cuser import [name]      import your currently logged-in ~/.claude as a new profile
-    cuser remove <profile>   delete a profile (asks for confirmation)
-    cuser rename <old> <new> rename a profile
-    cuser --update           update cuser to the latest release
-    cuser --version | -v     show the installed version
-    cuser --help | -h        show this help
+    claude-user                    open the interactive profile picker
+    claude-user <profile>          launch that profile directly (created if new)
+    claude-user <profile> [args]   launch that profile, passing [args] to `claude`
+    claude-user list | -l          list existing profiles
+    claude-user sync               copy shared config into every existing profile
+    claude-user import [name]      import your currently logged-in ~/.claude as a new profile
+    claude-user remove <profile>   delete a profile (asks for confirmation)
+    claude-user rename <old> <new> rename a profile
+    claude-user --update           update claude-user to the latest release
+    claude-user --version | -v     show the installed version
+    claude-user --help | -h        show this help
 
-The picker (plain `cuser`) also offers \"+ Import ~/.claude\" whenever a
+The picker (plain `claude-user` / `cuser`) also offers \"+ Import ~/.claude\" whenever a
 default ~/.claude exists, and \"+ New profile\" to log into a brand-new account.
 Highlighting an existing profile in the picker also offers `d` to delete it
 and `r` to rename it.
 
 Launching a profile also points ~/.claude and ~/.claude.json at it (via
 symlinks), so `claude` run directly afterward uses that same account. If
-~/.claude already exists as a real directory, run `cuser import <name>` first.
+~/.claude already exists as a real directory, run `claude-user import <name>` first.
 ";
 
 pub fn run() -> Result<()> {
@@ -45,7 +45,7 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         "--version" | "-v" => {
-            println!("cuser {}", env!("CARGO_PKG_VERSION"));
+            println!("claude-user {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         "list" | "-l" => cmd_list(),
