@@ -1,8 +1,9 @@
 pub mod launch;
 pub mod profiles;
 pub mod tui;
+pub mod update;
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use std::io::{self, Write};
 
 const HELP: &str = "\
@@ -15,10 +16,16 @@ USAGE:
     cuser list | -l          list existing profiles
     cuser sync               copy shared config into every existing profile
     cuser import [name]      import your currently logged-in ~/.claude as a new profile
+    cuser remove <profile>   delete a profile (asks for confirmation)
+    cuser rename <old> <new> rename a profile
+    cuser --update           update cuser to the latest release
+    cuser --version | -v     show the installed version
     cuser --help | -h        show this help
 
 The picker (plain `cuser`) also offers \"+ Import ~/.claude\" whenever a
 default ~/.claude exists, and \"+ New profile\" to log into a brand-new account.
+Highlighting an existing profile in the picker also offers `d` to delete it
+and `r` to rename it.
 ";
 
 pub fn run() -> Result<()> {
@@ -33,9 +40,16 @@ pub fn run() -> Result<()> {
             print!("{HELP}");
             Ok(())
         }
+        "--version" | "-v" => {
+            println!("cuser {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
         "list" | "-l" => cmd_list(),
         "sync" => cmd_sync(),
         "import" | "migrate" => cmd_import(args.get(1).cloned()),
+        "remove" | "rm" | "delete" => cmd_remove(args.get(1).cloned()),
+        "rename" => cmd_rename(args.get(1).cloned(), args.get(2).cloned()),
+        "--update" | "update" => update::run(),
         name => {
             profiles::validate_profile_name(name)?;
             let created = profiles::ensure_profile(name)?;
@@ -103,6 +117,31 @@ fn cmd_import(name: Option<String>) -> Result<()> {
     };
     profiles::import_default(&name)?;
     println!("Imported ~/.claude as profile \"{name}\".");
+    Ok(())
+}
+
+fn cmd_remove(name: Option<String>) -> Result<()> {
+    let name = name.ok_or_else(|| anyhow!("usage: cuser remove <profile>"))?;
+    if !profiles::profile_exists(&name)? {
+        bail!("profile \"{name}\" does not exist");
+    }
+    let answer = prompt(&format!(
+        "This deletes ~/.claude-profiles/{name}, including its stored login. Continue? [y/N] "
+    ))?;
+    if !answer.trim().eq_ignore_ascii_case("y") {
+        println!("Cancelled.");
+        return Ok(());
+    }
+    profiles::remove_profile(&name)?;
+    println!("Removed profile \"{name}\".");
+    Ok(())
+}
+
+fn cmd_rename(old: Option<String>, new: Option<String>) -> Result<()> {
+    let old = old.ok_or_else(|| anyhow!("usage: cuser rename <old> <new>"))?;
+    let new = new.ok_or_else(|| anyhow!("usage: cuser rename <old> <new>"))?;
+    profiles::rename_profile(&old, &new)?;
+    println!("Renamed \"{old}\" to \"{new}\".");
     Ok(())
 }
 

@@ -107,6 +107,31 @@ pub fn profile_exists(name: &str) -> Result<bool> {
     Ok(profile_dir(name)?.exists())
 }
 
+pub fn remove_profile(name: &str) -> Result<()> {
+    validate_profile_name(name)?;
+    let dir = profile_dir(name)?;
+    if !dir.exists() {
+        bail!("profile \"{name}\" does not exist");
+    }
+    fs::remove_dir_all(&dir)?;
+    Ok(())
+}
+
+pub fn rename_profile(old: &str, new: &str) -> Result<()> {
+    validate_profile_name(old)?;
+    validate_profile_name(new)?;
+    let old_dir = profile_dir(old)?;
+    if !old_dir.exists() {
+        bail!("profile \"{old}\" does not exist");
+    }
+    let new_dir = profile_dir(new)?;
+    if new_dir.exists() {
+        bail!("profile \"{new}\" already exists");
+    }
+    fs::rename(&old_dir, &new_dir)?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn harden_dir(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;

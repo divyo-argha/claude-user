@@ -49,6 +49,7 @@
 **Getting Started**
 - [🎯 The Problem](#-the-problem)
 - [📦 Install](#-install)
+- [⬆️ Updating](#-updating)
 - [🗑️ Uninstall](#-uninstall)
 - [⚡ Quick Start](#-quick-start)
 
@@ -152,6 +153,26 @@ cd claude-user
 
 ---
 
+## ⬆️ Updating
+
+```sh
+claude-user --update
+```
+
+Checks GitHub Releases for a newer version, downloads and verifies the matching binary, and replaces the installed `claude-user`/`cuser` binaries in place (needs `tar` on `PATH`, which every supported OS already ships).
+
+```
+Checking for updates...
+Updating claude-user 0.1.0 → 0.2.0 (linux x86_64)
+Updated to claude-user 0.2.0. Downloaded, verified, installed.
+```
+
+- If you installed with **npm**, `--update` steps aside instead: npm already owns that binary, so it tells you to run `npm install -g claude-user@latest`.
+- If the install directory isn't writable (e.g. a system-wide `cargo install` as another user), it tells you to retry with `sudo`.
+- Already up to date? It says so and exits without touching anything.
+
+---
+
 ## 🗑️ Uninstall
 
 ```sh
@@ -228,6 +249,7 @@ claude-user personal -p "explain this diff"
 - Profiles are created implicitly — `claude-user <name>` makes it if it doesn't exist
 - `claude-user list` shows every profile alongside its logged-in email and org, read straight from Claude's own credentials
 - `claude-user import [name]` moves your existing `~/.claude` into a new profile — no re-authentication needed
+- `claude-user remove <name>` deletes a profile after confirming · `claude-user rename <old> <new>` renames one
 - Profile names are validated (letters, digits, `-`, `_` only), so a typo can't touch the wrong directory
 
 </td>
@@ -268,21 +290,21 @@ claude-user personal -p "explain this diff"
 Launch it with plain `claude-user` (or its short alias, `cuser`) — no subcommand needed:
 
 ```
-┌ cuser ───────────────────────────────────────────────────┐
-│ Claude account switcher — ↑/↓ move, Enter select, q quit │
-├──────────────────────────────────────────────────────────┤
-│ Profiles                                                 │
-│ > work        (you@company.com • Acme Corp)              │
-│   personal    (you@gmail.com)                            │
-│   client-a                                               │
-│   + Import ~/.claude                                     │
-│   + New profile                                          │
-├──────────────────────────────────────────────────────────┤
-│ Select a profile and press Enter.                        │
-└──────────────────────────────────────────────────────────┘
+┌ cuser — Claude account switcher ───────────────────────┐
+│ ↑/↓ move · Enter select · d delete · r rename · q quit │
+├────────────────────────────────────────────────────────┤
+│ Profiles                                               │
+│ > work        (you@company.com • Acme Corp)            │
+│   personal    (you@gmail.com)                          │
+│   client-a                                             │
+│   + Import ~/.claude                                   │
+│   + New profile                                        │
+├────────────────────────────────────────────────────────┤
+│ Select a profile and press Enter.                      │
+└────────────────────────────────────────────────────────┘
 ```
 
-Picking **+ New profile** or **+ Import ~/.claude** drops into a one-line name prompt, then launches straight into `claude`.
+Picking **+ New profile** or **+ Import ~/.claude** drops into a one-line name prompt, then launches straight into `claude`. Highlighting an existing profile also offers `d` to delete it (with an inline confirmation) and `r` to rename it — no CLI required.
 
 ### ⌨️ Keyboard Navigation
 
@@ -291,7 +313,10 @@ Picking **+ New profile** or **+ Import ~/.claude** drops into a one-line name p
 | <kbd>↑</kbd> / <kbd>k</kbd> | Move selection up |
 | <kbd>↓</kbd> / <kbd>j</kbd> | Move selection down |
 | <kbd>Enter ↵</kbd> | Select profile, or confirm a new name |
-| <kbd>Esc</kbd> | Cancel naming and return to the list |
+| <kbd>d</kbd> | Delete the highlighted profile (asks to confirm) |
+| <kbd>r</kbd> | Rename the highlighted profile |
+| <kbd>y</kbd> / <kbd>n</kbd> | Confirm or cancel a pending delete |
+| <kbd>Esc</kbd> | Cancel naming/renaming and return to the list |
 | <kbd>q</kbd> | Quit without launching anything |
 | <kbd>Ctrl</kbd>+<kbd>C</kbd> | Quit immediately, from anywhere |
 | <kbd>Backspace</kbd> | Edit the name you're typing |
@@ -318,8 +343,8 @@ claude-user work
 claude reads all of its state — credentials, settings, project
 history — from CLAUDE_CONFIG_DIR. Pointing it at a different
 directory per profile gives each account a fully separate
-environment, with no extra moving parts and no code in claude-user
-that touches the network.
+environment, with no extra moving parts — switching never touches
+the network itself (only `claude-user --update` does, separately).
 ```
 
 ### A day with multiple accounts
@@ -354,15 +379,17 @@ No re-login. No shared history. No file to remember to rename back.
 **What claude-user does**
 - Creates every profile directory at `0700`, and hardens `.claude.json` / `.credentials.json` inside it to `0600` (Unix)
 - Excludes `.claude.json` and `.credentials.json` from `claude-user sync`, so shared config can never overwrite a login
+- Requires an explicit confirmation — `[y/N]` on the CLI, `y`/`Y` in the TUI — before `remove` deletes a profile's stored credentials
 - Validates profile names against a strict allow-list before touching the filesystem
+- `--update` verifies the downloaded binary's reported version before replacing anything already installed
 - Uses an atomic rename (falling back to copy-then-remove) when importing your existing `~/.claude`
 
 </td>
 <td width="50%" valign="top">
 
 **What claude-user never does**
-- Never talks to Anthropic's API, npm, or any network endpoint itself — all network activity belongs to `claude`, not `claude-user`
-- Never modifies anything outside `~/.claude-profiles`, except your default `~/.claude` / `~/.claude.json` — and only when you explicitly run `import`
+- Never talks to the network on your behalf during normal use — `list`, `sync`, `import`, and launching a profile are all local filesystem operations; only `claude-user --update` reaches out, and only to `github.com`/`api.github.com` to check for and download a new release
+- Never modifies anything outside `~/.claude-profiles`, except your default `~/.claude` / `~/.claude.json` (only when you explicitly run `import`) and its own installed binaries (only when you explicitly run `--update`)
 - Never invents new credential storage — each profile's `.credentials.json` is the same file Claude Code already writes, just isolated per account
 
 </td>
@@ -383,9 +410,13 @@ No re-login. No shared history. No file to remember to rename back.
 | `claude-user list` / `-l` | List every profile, with email/org where known |
 | `claude-user sync` | Copy `~/.claude-profiles/shared/` into every existing profile |
 | `claude-user import [name]` | Import your currently logged-in `~/.claude` as a new profile |
+| `claude-user remove <profile>` | Delete a profile — asks for confirmation first, since it deletes stored credentials |
+| `claude-user rename <old> <new>` | Rename a profile |
+| `claude-user --update` | Update to the latest release (see [Updating](#-updating)) |
+| `claude-user --version` / `-v` | Show the installed version |
 | `claude-user --help` / `-h` | Show usage |
 
-**Aliases:** `cuser` → short alias for `claude-user` (identical binary, works everywhere above) · `migrate` → alias for `import`
+**Aliases:** `cuser` → short alias for `claude-user` (identical binary, works everywhere above) · `migrate` → alias for `import` · `rm` / `delete` → aliases for `remove` · `update` → alias for `--update`
 
 ---
 
@@ -415,6 +446,8 @@ Nothing under `~/.claude` is touched except by `claude-user import`, and even th
 | `claude-user does not ship a prebuilt binary for ...` | Your OS/architecture isn't in the current release matrix (Windows, for example) — build from source with `cargo install --path .` |
 | Picker draws garbled or doesn't respond | The TUI needs a real interactive terminal (it uses raw mode) — it won't work piped through another program or in a non-TTY shell |
 | `claude-user import` fails with "profile already exists" | Pick a different name — `import` never overwrites an existing profile |
+| `--update` says "managed by npm" | Expected — run `npm install -g claude-user@latest` instead. Self-update only replaces binaries installed via `install.sh` or `cargo install` |
+| `--update` fails with "permission denied" | Retry with `sudo claude-user --update`, or reinstall to a directory your user owns |
 
 ---
 
