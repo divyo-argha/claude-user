@@ -1,0 +1,42 @@
+{
+  "name": "claude-user",
+  "version": "0.1.0",
+  "description": "Switch between multiple Claude Code accounts with an interactive picker — isolated config, credentials, and settings per profile.",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "cli",
+    "accounts",
+    "profiles",
+    "multi-account",
+    "anthropic"
+  ],
+  "homepage": "https://github.com/divyo-argha/claude-user#readme",
+  "bugs": "https://github.com/divyo-argha/claude-user/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/divyo-argha/claude-user.git"
+  },
+  "license": "MIT",
+  "author": "divyo-argha",
+  "bin": {
+    "claude-user": "bin/claude-user.js",
+    "cuser": "bin/claude-user.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "linux",
+    "darwin"
+  ],
+  "optionalDependencies": {
+    "claude-user-linux-x64": "0.1.0",
+    "claude-user-linux-arm64": "0.1.0",
+    "claude-user-darwin-x64": "0.1.0",
+    "claude-user-darwin-arm64": "0.1.0"
+  }
+}

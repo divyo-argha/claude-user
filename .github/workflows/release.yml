@@ -48,3 +48,49 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*.tar.gz
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ secrets.NPM_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Set root package version from tag
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#v}"
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json'));
+            p.version = '$VERSION';
+            for (const k of Object.keys(p.optionalDependencies || {})) {
+              p.optionalDependencies[k] = '$VERSION';
+            }
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+
+      - name: Build platform packages
+        run: node npm/build-packages.js
+
+      - name: Publish platform packages
+        run: |
+          set -eu
+          for dir in npm/packages/*/; do
+            (cd "$dir" && npm publish --access public)
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish main package
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
