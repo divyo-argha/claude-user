@@ -15,6 +15,8 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
           - os: macos-13
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -50,7 +52,6 @@ jobs:
   publish-npm:
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ secrets.NPM_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -63,6 +64,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Set root package version from tag
+        if: ${{ secrets.NPM_TOKEN != '' }}
         run: |
           set -eu
           VERSION="${GITHUB_REF_NAME#v}"
@@ -77,9 +79,11 @@ jobs:
           "
 
       - name: Build platform packages
+        if: ${{ secrets.NPM_TOKEN != '' }}
         run: node npm/build-packages.js
 
       - name: Publish platform packages
+        if: ${{ secrets.NPM_TOKEN != '' }}
         run: |
           set -eu
           for dir in npm/packages/*/; do
@@ -89,6 +93,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish main package
+        if: ${{ secrets.NPM_TOKEN != '' }}
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
