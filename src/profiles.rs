@@ -79,7 +79,73 @@ pub fn activate_profile(name: &str) -> Result<()> {
     }
     link_default(&default_claude_dir()?, &dir)?;
     link_default(&default_claude_json()?, &dir.join(".claude.json"))?;
+    if let Ok(root) = profiles_root() {
+        let _ = fs::write(root.join(".current"), name);
+    }
     Ok(())
+}
+
+/// Returns the name of the currently active profile (the one pointed to by ~/.claude,
+/// which will run when typing `claude` directly in the terminal).
+pub fn current_profile() -> Result<Option<String>> {
+    let claude_dir = default_claude_dir()?;
+    if is_symlink(&claude_dir) {
+        if let Ok(target) = fs::read_link(&claude_dir) {
+            if let Some(name) = profile_name_from_link_target(&target)? {
+                return Ok(Some(name));
+            }
+        }
+    }
+
+    let claude_json = default_claude_json()?;
+    if is_symlink(&claude_json) {
+        if let Ok(target) = fs::read_link(&claude_json) {
+            if let Some(parent) = target.parent() {
+                if let Some(name) = profile_name_from_link_target(parent)? {
+                    return Ok(Some(name));
+                }
+            }
+        }
+    }
+
+    if let Ok(root) = profiles_root() {
+        let current_file = root.join(".current");
+        if current_file.exists() {
+            if let Ok(content) = fs::read_to_string(&current_file) {
+                let name = content.trim().to_string();
+                if profile_exists(&name).unwrap_or(false) {
+                    return Ok(Some(name));
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn profile_name_from_link_target(target: &Path) -> Result<Option<String>> {
+    let root = profiles_root()?;
+    if let Ok(canon_target) = target.canonicalize() {
+        if let Ok(canon_root) = root.canonicalize() {
+            if let Ok(rel) = canon_target.strip_prefix(&canon_root) {
+                if let Some(first) = rel.components().next() {
+                    let name = first.as_os_str().to_string_lossy().into_owned();
+                    if !name.is_empty() && name != "shared" && profile_exists(&name).unwrap_or(false) {
+                        return Ok(Some(name));
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(file_name) = target.file_name() {
+        let name = file_name.to_string_lossy().into_owned();
+        if !name.is_empty() && name != "shared" && profile_exists(&name).unwrap_or(false) {
+            return Ok(Some(name));
+        }
+    }
+
+    Ok(None)
 }
 
 fn link_default(link_path: &Path, target: &Path) -> Result<()> {
@@ -207,6 +273,21 @@ fn retarget_active(old_dir: &Path, new_dir: Option<&Path>) -> Result<()> {
     let old_json = old_dir.join(".claude.json");
     let new_json = new_dir.map(|d| d.join(".claude.json"));
     retarget_link(&default_claude_json()?, &old_json, new_json.as_deref())?;
+
+    if let Ok(root) = profiles_root() {
+        let current_file = root.join(".current");
+        if let Some(new_d) = new_dir {
+            if let Some(name) = new_d.file_name() {
+                let _ = fs::write(&current_file, name.to_string_lossy().as_bytes());
+            }
+        } else if let Ok(current) = fs::read_to_string(&current_file) {
+            if let Some(old_name) = old_dir.file_name() {
+                if current.trim() == old_name.to_string_lossy() {
+                    let _ = fs::remove_file(&current_file);
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -389,5 +470,28 @@ pub fn import_default(name: &str) -> Result<()> {
     }
     sync_profile(name)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_profile_name() {
+        assert!(validate_profile_name("work").is_ok());
+        assert!(validate_profile_name("work-123_test").is_ok());
+        assert!(validate_profile_name("").is_err());
+        assert!(validate_profile_name("shared").is_err());
+        assert!(validate_profile_name(".").is_err());
+        assert!(validate_profile_name("..").is_err());
+        assert!(validate_profile_name("bad/name").is_err());
+        assert!(validate_profile_name("bad name").is_err());
+    }
+
+    #[test]
+    fn test_profile_name_from_link_target_empty_or_shared() {
+        assert!(profile_name_from_link_target(Path::new("")).unwrap().is_none());
+        assert!(profile_name_from_link_target(Path::new("/some/path/shared")).unwrap().is_none());
+    }
 }
 

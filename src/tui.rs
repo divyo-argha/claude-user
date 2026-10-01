@@ -38,20 +38,24 @@ enum Mode {
 }
 
 enum Item {
-    Profile { name: String, display: String },
+    Profile {
+        name: String,
+        display: String,
+        is_current: bool,
+    },
     ImportDefault,
     NewProfile,
 }
 
 pub fn run_picker() -> Result<Option<PickResult>> {
-    let items = build_items()?;
+    let (items, current_profile, current_idx) = build_items()?;
 
     enable_raw_mode()?;
     stdout().execute(EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout());
     let mut terminal: CuserTerminal = Terminal::new(backend)?;
 
-    let result = event_loop(&mut terminal, items);
+    let result = event_loop(&mut terminal, items, current_profile, current_idx);
 
     disable_raw_mode().ok();
     stdout().execute(LeaveAlternateScreen).ok();
@@ -59,9 +63,16 @@ pub fn run_picker() -> Result<Option<PickResult>> {
     result
 }
 
-fn build_items() -> Result<Vec<Item>> {
+fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
+    let current = profiles::current_profile()?;
     let mut items = Vec::new();
+    let mut current_idx = None;
+
     for name in profiles::list_profiles()? {
+        let is_current = current.as_deref() == Some(&name);
+        if is_current {
+            current_idx = Some(items.len());
+        }
         let info = profiles::get_profile_info(&name).unwrap_or(profiles::ProfileInfo {
             name: name.clone(),
             email: None,
@@ -72,13 +83,17 @@ fn build_items() -> Result<Vec<Item>> {
             (Some(email), None) => format!("{name}  ({email})"),
             (None, _) => name.clone(),
         };
-        items.push(Item::Profile { name, display });
+        items.push(Item::Profile {
+            name,
+            display,
+            is_current,
+        });
     }
     if profiles::can_import()? {
         items.push(Item::ImportDefault);
     }
     items.push(Item::NewProfile);
-    Ok(items)
+    Ok((items, current, current_idx))
 }
 
 fn selected_profile_name(items: &[Item], state: &ListState) -> Option<String> {
@@ -88,14 +103,19 @@ fn selected_profile_name(items: &[Item], state: &ListState) -> Option<String> {
     }
 }
 
-fn event_loop(terminal: &mut CuserTerminal, mut items: Vec<Item>) -> Result<Option<PickResult>> {
+fn event_loop(
+    terminal: &mut CuserTerminal,
+    mut items: Vec<Item>,
+    mut current_profile: Option<String>,
+    current_idx: Option<usize>,
+) -> Result<Option<PickResult>> {
     let mut list_state = ListState::default();
-    list_state.select(Some(0));
+    list_state.select(Some(current_idx.unwrap_or(0)));
     let mut mode = Mode::Picking;
     let mut error: Option<String> = None;
 
     loop {
-        terminal.draw(|f| draw(f, &items, &mut list_state, &mode, &error))?;
+        terminal.draw(|f| draw(f, &items, &mut list_state, &mode, &error, &current_profile))?;
 
         let Event::Key(key) = event::read()? else {
             continue;
@@ -167,8 +187,10 @@ fn event_loop(terminal: &mut CuserTerminal, mut items: Vec<Item>) -> Result<Opti
                         } else {
                             match profiles::rename_profile(&old, &name) {
                                 Ok(()) => {
-                                    items = build_items()?;
-                                    list_state.select(Some(0));
+                                    let (new_items, new_current, new_idx) = build_items()?;
+                                    items = new_items;
+                                    current_profile = new_current;
+                                    list_state.select(Some(new_idx.unwrap_or(0)));
                                     mode = Mode::Picking;
                                     error = None;
                                 }
@@ -197,7 +219,9 @@ fn event_loop(terminal: &mut CuserTerminal, mut items: Vec<Item>) -> Result<Opti
             Mode::ConfirmDelete { name } => match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => match profiles::remove_profile(name) {
                     Ok(()) => {
-                        items = build_items()?;
+                        let (new_items, new_current, _) = build_items()?;
+                        items = new_items;
+                        current_profile = new_current;
                         let idx = list_state
                             .selected()
                             .unwrap_or(0)
@@ -220,10 +244,18 @@ fn event_loop(terminal: &mut CuserTerminal, mut items: Vec<Item>) -> Result<Opti
     }
 }
 
-fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error: &Option<String>) {
+fn draw(
+    f: &mut Frame,
+    items: &[Item],
+    state: &mut ListState,
+    mode: &Mode,
+    error: &Option<String>,
+    current_profile: &Option<String>,
+) {
     let logo_color_1 = Color::Rgb(217, 119, 87);
     let logo_color_2 = Color::Rgb(148, 163, 184);
     let border_color = Color::Rgb(71, 85, 105);
+    let active_color = Color::Rgb(74, 222, 128);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -277,11 +309,6 @@ fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error
         .iter()
         .enumerate()
         .map(|(idx, item)| {
-            let text = match item {
-                Item::Profile { display, .. } => display.as_str(),
-                Item::ImportDefault => IMPORT_DEFAULT,
-                Item::NewProfile => NEW_PROFILE,
-            };
             let is_selected = state.selected() == Some(idx);
             let prefix = if is_selected { " ▶ " } else { "   " };
             let style = if is_selected {
@@ -289,19 +316,44 @@ fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error
             } else {
                 Style::default().fg(Color::White)
             };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(logo_color_1)),
-                Span::styled(text.to_string(), style),
-            ]))
+
+            match item {
+                Item::Profile { display, is_current, .. } => {
+                    let mut spans = vec![
+                        Span::styled(prefix, Style::default().fg(logo_color_1)),
+                        Span::styled(display.clone(), style),
+                    ];
+                    if *is_current {
+                        spans.push(Span::styled(
+                            "  ● current",
+                            Style::default().fg(active_color).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    ListItem::new(Line::from(spans))
+                }
+                Item::ImportDefault => ListItem::new(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(logo_color_1)),
+                    Span::styled(IMPORT_DEFAULT, style),
+                ])),
+                Item::NewProfile => ListItem::new(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(logo_color_1)),
+                    Span::styled(NEW_PROFILE, style),
+                ])),
+            }
         })
         .collect();
+
+    let profiles_title = match current_profile {
+        Some(curr) => format!(" PROFILES (active: {curr}) "),
+        None => " PROFILES ".to_string(),
+    };
 
     let list = List::new(list_items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(border_color))
-                .title(Span::styled(" PROFILES ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)))
+                .title(Span::styled(profiles_title, Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)))
         );
     f.render_stateful_widget(list, chunks[2], state);
 
@@ -309,7 +361,10 @@ fn draw(f: &mut Frame, items: &[Item], state: &mut ListState, mode: &Mode, error
         Mode::Picking => error
             .clone()
             .map(|e| format!("Error: {e}"))
-            .unwrap_or_else(|| "Select a profile and press Enter.".to_string()),
+            .unwrap_or_else(|| match current_profile {
+                Some(curr) => format!("Select profile & press Enter. Running `claude` in terminal uses: \"{curr}\""),
+                None => "Select a profile and press Enter.".to_string(),
+            }),
         Mode::Naming { action, buffer } => {
             let label = match action {
                 Action::Rename { .. } => "New name",

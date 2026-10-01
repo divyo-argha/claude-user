@@ -14,6 +14,7 @@ USAGE:
     claude-user <profile>          launch that profile directly (created if new)
     claude-user <profile> [args]   launch that profile, passing [args] to `claude`
     claude-user list | -l          list existing profiles
+    claude-user current            show the profile currently pointed to by `claude`
     claude-user sync               copy shared config into every existing profile
     claude-user import [name]      import your currently logged-in ~/.claude as a new profile
     claude-user remove <profile>   delete a profile (asks for confirmation)
@@ -49,6 +50,7 @@ pub fn run() -> Result<()> {
             Ok(())
         }
         "list" | "-l" => cmd_list(),
+        "current" | "active" | "status" => cmd_current(),
         "sync" => cmd_sync(),
         "import" | "migrate" => cmd_import(args.get(1).cloned()),
         "remove" | "rm" | "delete" => cmd_remove(args.get(1).cloned()),
@@ -94,16 +96,37 @@ fn launch_profile(name: &str, args: &[String]) -> Result<()> {
 
 fn cmd_list() -> Result<()> {
     let names = profiles::list_profiles()?;
+    let current = profiles::current_profile()?;
     if names.is_empty() {
         println!("No profiles yet. Run `cuser <name>` to create one.");
     } else {
         for name in names {
+            let is_current = current.as_deref() == Some(&name);
+            let badge = if is_current { "  * (current)" } else { "" };
             let info = profiles::get_profile_info(&name)?;
             match (info.email, info.org_name) {
-                (Some(email), Some(org)) => println!("{name}  ({email} • {org})"),
-                (Some(email), None) => println!("{name}  ({email})"),
-                (None, _) => println!("{name}"),
+                (Some(email), Some(org)) => println!("{name}  ({email} • {org}){badge}"),
+                (Some(email), None) => println!("{name}  ({email}){badge}"),
+                (None, _) => println!("{name}{badge}"),
             }
+        }
+    }
+    Ok(())
+}
+
+fn cmd_current() -> Result<()> {
+    match profiles::current_profile()? {
+        Some(name) => {
+            let info = profiles::get_profile_info(&name)?;
+            let details = match (info.email, info.org_name) {
+                (Some(email), Some(org)) => format!(" ({email} • {org})"),
+                (Some(email), None) => format!(" ({email})"),
+                (None, _) => String::new(),
+            };
+            println!("{name}{details}");
+        }
+        None => {
+            println!("No active profile (running `claude` in terminal uses default ~/.claude).");
         }
     }
     Ok(())
