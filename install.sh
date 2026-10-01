@@ -59,7 +59,7 @@ printf "${ORANGE}░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀░░
 
 VERSION_STR=$("$BIN_DIR/cuser" --version 2>/dev/null | awk '{print $2}')
 if [ -z "$VERSION_STR" ]; then
-    VERSION_STR="0.1.0"
+    VERSION_STR="0.2.0"
 fi
 printf "${GREEN}✓ Installed claude-user v${VERSION_STR} successfully!${NC}\n"
 printf "  Location: ${BOLD}$BIN_DIR${NC}\n\n"
