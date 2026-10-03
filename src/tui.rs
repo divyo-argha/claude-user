@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
 use std::io::{stdout, Stdout};
 
+use crate::mappings;
 use crate::profiles;
 
 type CuserTerminal = Terminal<CrosstermBackend<Stdout>>;
@@ -42,6 +43,8 @@ enum Item {
         name: String,
         display: String,
         is_current: bool,
+        is_disabled: bool,
+        is_mapped: bool,
     },
     ImportDefault,
     NewProfile,
@@ -65,11 +68,19 @@ pub fn run_picker() -> Result<Option<PickResult>> {
 
 fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
     let current = profiles::current_profile()?;
+    let cwd = std::env::current_dir().ok();
+    let mapped_profile = cwd.as_ref().and_then(|p| {
+        mappings::resolve_mapping(p).ok().flatten().map(|(name, _)| name)
+    });
+
     let mut items = Vec::new();
     let mut current_idx = None;
 
     for name in profiles::list_profiles()? {
         let is_current = current.as_deref() == Some(&name);
+        let is_mapped = mapped_profile.as_deref() == Some(&name);
+        let is_disabled = profiles::is_profile_disabled(&name).unwrap_or(false);
+
         if is_current {
             current_idx = Some(items.len());
         }
@@ -77,6 +88,7 @@ fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
             name: name.clone(),
             email: None,
             org_name: None,
+            is_disabled,
         });
         let display = match (info.email, info.org_name) {
             (Some(email), Some(org)) => format!("{name}  ({email} • {org})"),
@@ -87,8 +99,20 @@ fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
             name,
             display,
             is_current,
+            is_disabled,
+            is_mapped,
         });
     }
+
+    if current_idx.is_none() && mapped_profile.is_some() {
+        for (i, it) in items.iter().enumerate() {
+            if let Item::Profile { is_mapped: true, .. } = it {
+                current_idx = Some(i);
+                break;
+            }
+        }
+    }
+
     if profiles::can_import()? {
         items.push(Item::ImportDefault);
     }
@@ -153,6 +177,23 @@ fn event_loop(
                             buffer: name,
                         };
                         error = None;
+                    }
+                }
+                KeyCode::Char('e') => {
+                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                        let is_disabled = profiles::is_profile_disabled(&name).unwrap_or(false);
+                        match profiles::set_profile_disabled(&name, !is_disabled) {
+                            Ok(()) => {
+                                let sel = list_state.selected();
+                                let (new_items, new_current, _) = build_items()?;
+                                items = new_items;
+                                current_profile = new_current;
+                                list_state.select(sel);
+                                let state_str = if !is_disabled { "disabled" } else { "enabled" };
+                                error = Some(format!("Profile \"{name}\" is now {state_str}."));
+                            }
+                            Err(e) => error = Some(e.to_string()),
+                        }
                     }
                 }
                 KeyCode::Enter => {
@@ -288,9 +329,11 @@ fn draw(
             Span::styled(" ↑/↓ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Navigate  |  "),
             Span::styled(" Enter ↵ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-            Span::raw("Select & Launch  |  "),
+            Span::raw("Launch  |  "),
             Span::styled(" r ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Rename  |  "),
+            Span::styled(" e ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Disable/Enable  |  "),
             Span::styled(" d ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Delete  |  "),
             Span::styled(" q / Esc ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
@@ -311,14 +354,17 @@ fn draw(
         .map(|(idx, item)| {
             let is_selected = state.selected() == Some(idx);
             let prefix = if is_selected { " ▶ " } else { "   " };
-            let style = if is_selected {
-                Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
 
             match item {
-                Item::Profile { display, is_current, .. } => {
+                Item::Profile { display, is_current, is_disabled, is_mapped, .. } => {
+                    let style = if is_selected {
+                        Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
+                    } else if *is_disabled {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+
                     let mut spans = vec![
                         Span::styled(prefix, Style::default().fg(logo_color_1)),
                         Span::styled(display.clone(), style),
@@ -329,16 +375,42 @@ fn draw(
                             Style::default().fg(active_color).add_modifier(Modifier::BOLD),
                         ));
                     }
+                    if *is_mapped {
+                        spans.push(Span::styled(
+                            "  ★ mapped",
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if *is_disabled {
+                        spans.push(Span::styled(
+                            "  [disabled]",
+                            Style::default().fg(Color::DarkGray),
+                        ));
+                    }
                     ListItem::new(Line::from(spans))
                 }
-                Item::ImportDefault => ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(logo_color_1)),
-                    Span::styled(IMPORT_DEFAULT, style),
-                ])),
-                Item::NewProfile => ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(logo_color_1)),
-                    Span::styled(NEW_PROFILE, style),
-                ])),
+                Item::ImportDefault => {
+                    let style = if is_selected {
+                        Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(logo_color_1)),
+                        Span::styled(IMPORT_DEFAULT, style),
+                    ]))
+                }
+                Item::NewProfile => {
+                    let style = if is_selected {
+                        Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(logo_color_1)),
+                        Span::styled(NEW_PROFILE, style),
+                    ]))
+                }
             }
         })
         .collect();

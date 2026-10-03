@@ -124,13 +124,24 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 | `cuser` | | Open the interactive console profile picker | `cuser` |
 | `cuser <profile>` | | Launch Claude with this profile (creates it if new) | `cuser work` |
 | `cuser <profile> [args...]` | | Launch profile, forwarding all remaining arguments to Claude | `cuser personal --continue` |
+| `cuser run [args...]` | | Launch profile mapped to current directory | `cuser run --resume` |
+
+### Directory Mapping
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `cuser map` | List all directory mappings and show active mapping for cwd | `cuser map` |
+| `cuser map <profile> [dir]` | Map directory to a profile (defaults to current dir `.`) | `cuser map work ~/work/client-app` |
+| `cuser unmap [dir]` | Remove a directory mapping (defaults to current dir `.`) | `cuser unmap` |
 
 ### Profile & Config Management
 | Command | Alias / Alternates | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `cuser import [name]` | `cuser migrate [name]` | Import current `~/.claude` credentials as a profile | `cuser import work` |
-| `cuser list` | `cuser -l` | List all profiles with linked email/org information | `cuser list` |
-| `cuser rename <old> <new>` | | Rename an existing profile | `cuser rename main work` |
+| `cuser list [--json]` | `cuser -l` | List all profiles with linked email/org information | `cuser list --json` |
+| `cuser current [--json]` | `cuser status`, `active` | Show current active profile | `cuser current --json` |
+| `cuser disable <profile>` | | Mark profile as disabled (excluded from rotation) | `cuser disable client-temp` |
+| `cuser enable <profile>` | | Re-enable a disabled profile | `cuser enable client-temp` |
+| `cuser rename <old> <new>` | | Rename an existing profile (auto-updates directory mappings) | `cuser rename main work` |
 | `cuser remove <profile>` | `cuser rm`, `cuser delete` | Delete profile directory and stored credentials (asks confirmation) | `cuser remove personal` |
 | `cuser sync` | | Sync files from `shared/` directory into all profiles | `cuser sync` |
 
@@ -148,23 +159,23 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 If you run `cuser` with no arguments, it opens the interactive Terminal User Interface:
 
 ```
-┌ cuser — Claude account switcher ───────────────────────┐
-│ ↑/↓ move · Enter select · d delete · r rename · q quit │
-├────────────────────────────────────────────────────────┤
-│ Profiles                                               │
-│ > work        (you@company.com • Acme Corp)            │
-│   personal    (you@gmail.com)                          │
-│   + Import ~/.claude                                   │
-│   + New profile                                        │
-├────────────────────────────────────────────────────────┤
-│ Select a profile and press Enter.                      │
-└────────────────────────────────────────────────────────┘
+┌ KEYBINDINGS ─────────────────────────────────────────────────────────────┐
+│ ↑/↓ Navigate | Enter ↵ Launch | r Rename | e Disable/Enable | d Delete | q Quit │
+├──────────────────────────────────────────────────────────────────────────┤
+│ PROFILES (active: work)                                                  │
+│ ▶ work        (you@company.com • Acme Corp)  ● current  ★ mapped         │
+│   personal    (you@gmail.com)                                            │
+│   client-temp (client@org.com)  [disabled]                               │
+│   + Import ~/.claude                                                     │
+│   + New profile                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Keyboard Navigation
 * <kbd>↑</kbd> or <kbd>k</kbd> / <kbd>↓</kbd> or <kbd>j</kbd>: Navigate through profiles
 * <kbd>Enter ↵</kbd>: Select and launch the profile
 * <kbd>r</kbd>: Rename the highlighted profile
+* <kbd>e</kbd>: Toggle disabling / enabling the highlighted profile
 * <kbd>d</kbd>: Delete the highlighted profile (will ask for `y`/`n` confirmation)
 * <kbd>q</kbd> or <kbd>Esc</kbd>: Exit the picker
 

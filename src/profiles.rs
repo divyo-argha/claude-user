@@ -2,12 +2,12 @@ use anyhow::{anyhow, bail, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ProfileInfo {
     pub name: String,
     pub email: Option<String>,
     pub org_name: Option<String>,
+    pub is_disabled: bool,
 }
 
 
@@ -89,33 +89,30 @@ pub fn activate_profile(name: &str) -> Result<()> {
 /// which will run when typing `claude` directly in the terminal).
 pub fn current_profile() -> Result<Option<String>> {
     let claude_dir = default_claude_dir()?;
-    if is_symlink(&claude_dir) {
-        if let Ok(target) = fs::read_link(&claude_dir) {
-            if let Some(name) = profile_name_from_link_target(&target)? {
-                return Ok(Some(name));
-            }
-        }
+    if is_symlink(&claude_dir)
+        && let Ok(target) = fs::read_link(&claude_dir)
+        && let Some(name) = profile_name_from_link_target(&target)?
+    {
+        return Ok(Some(name));
     }
 
     let claude_json = default_claude_json()?;
-    if is_symlink(&claude_json) {
-        if let Ok(target) = fs::read_link(&claude_json) {
-            if let Some(parent) = target.parent() {
-                if let Some(name) = profile_name_from_link_target(parent)? {
-                    return Ok(Some(name));
-                }
-            }
-        }
+    if is_symlink(&claude_json)
+        && let Ok(target) = fs::read_link(&claude_json)
+        && let Some(parent) = target.parent()
+        && let Some(name) = profile_name_from_link_target(parent)?
+    {
+        return Ok(Some(name));
     }
 
     if let Ok(root) = profiles_root() {
         let current_file = root.join(".current");
-        if current_file.exists() {
-            if let Ok(content) = fs::read_to_string(&current_file) {
-                let name = content.trim().to_string();
-                if profile_exists(&name).unwrap_or(false) {
-                    return Ok(Some(name));
-                }
+        if current_file.exists()
+            && let Ok(content) = fs::read_to_string(&current_file)
+        {
+            let name = content.trim().to_string();
+            if profile_exists(&name).unwrap_or(false) {
+                return Ok(Some(name));
             }
         }
     }
@@ -125,16 +122,14 @@ pub fn current_profile() -> Result<Option<String>> {
 
 fn profile_name_from_link_target(target: &Path) -> Result<Option<String>> {
     let root = profiles_root()?;
-    if let Ok(canon_target) = target.canonicalize() {
-        if let Ok(canon_root) = root.canonicalize() {
-            if let Ok(rel) = canon_target.strip_prefix(&canon_root) {
-                if let Some(first) = rel.components().next() {
-                    let name = first.as_os_str().to_string_lossy().into_owned();
-                    if !name.is_empty() && name != "shared" && profile_exists(&name).unwrap_or(false) {
-                        return Ok(Some(name));
-                    }
-                }
-            }
+    if let Ok(canon_target) = target.canonicalize()
+        && let Ok(canon_root) = root.canonicalize()
+        && let Ok(rel) = canon_target.strip_prefix(&canon_root)
+        && let Some(first) = rel.components().next()
+    {
+        let name = first.as_os_str().to_string_lossy().into_owned();
+        if !name.is_empty() && name != "shared" && profile_exists(&name).unwrap_or(false) {
+            return Ok(Some(name));
         }
     }
 
@@ -216,22 +211,44 @@ pub fn get_profile_info(name: &str) -> Result<ProfileInfo> {
     let mut org_name = None;
 
     let claude_json_path = dir.join(".claude.json");
-    if claude_json_path.exists() {
-        if let Ok(content) = fs::read_to_string(&claude_json_path) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(oauth) = val.get("oauthAccount") {
-                    email = oauth.get("emailAddress").and_then(|v| v.as_str()).map(String::from);
-                    org_name = oauth.get("organizationName").and_then(|v| v.as_str()).map(String::from);
-                }
-            }
-        }
+    if claude_json_path.exists()
+        && let Ok(content) = fs::read_to_string(&claude_json_path)
+        && let Ok(val) = serde_json::from_str::<serde_json::Value>(&content)
+        && let Some(oauth) = val.get("oauthAccount")
+    {
+        email = oauth.get("emailAddress").and_then(|v| v.as_str()).map(String::from);
+        org_name = oauth.get("organizationName").and_then(|v| v.as_str()).map(String::from);
     }
+
+    let is_disabled = is_profile_disabled(name)?;
 
     Ok(ProfileInfo {
         name: name.to_string(),
         email,
         org_name,
+        is_disabled,
     })
+}
+
+pub fn is_profile_disabled(name: &str) -> Result<bool> {
+    validate_profile_name(name)?;
+    let marker = profile_dir(name)?.join(".disabled");
+    Ok(marker.exists())
+}
+
+pub fn set_profile_disabled(name: &str, disabled: bool) -> Result<()> {
+    validate_profile_name(name)?;
+    let dir = profile_dir(name)?;
+    if !dir.exists() {
+        bail!("profile \"{name}\" does not exist");
+    }
+    let marker = dir.join(".disabled");
+    if disabled {
+        fs::write(&marker, b"")?;
+    } else if marker.exists() {
+        fs::remove_file(&marker)?;
+    }
+    Ok(())
 }
 
 pub fn profile_exists(name: &str) -> Result<bool> {
@@ -244,6 +261,7 @@ pub fn remove_profile(name: &str) -> Result<()> {
     if !dir.exists() {
         bail!("profile \"{name}\" does not exist");
     }
+    let _ = crate::mappings::remove_profile_mappings(name);
     retarget_active(&dir, None)?;
     fs::remove_dir_all(&dir)?;
     Ok(())
@@ -260,6 +278,7 @@ pub fn rename_profile(old: &str, new: &str) -> Result<()> {
     if new_dir.exists() {
         bail!("profile \"{new}\" already exists");
     }
+    let _ = crate::mappings::rename_profile_mappings(old, new);
     retarget_active(&old_dir, Some(&new_dir))?;
     fs::rename(&old_dir, &new_dir)?;
     Ok(())
@@ -280,12 +299,11 @@ fn retarget_active(old_dir: &Path, new_dir: Option<&Path>) -> Result<()> {
             if let Some(name) = new_d.file_name() {
                 let _ = fs::write(&current_file, name.to_string_lossy().as_bytes());
             }
-        } else if let Ok(current) = fs::read_to_string(&current_file) {
-            if let Some(old_name) = old_dir.file_name() {
-                if current.trim() == old_name.to_string_lossy() {
-                    let _ = fs::remove_file(&current_file);
-                }
-            }
+        } else if let Ok(current) = fs::read_to_string(&current_file)
+            && let Some(old_name) = old_dir.file_name()
+            && current.trim() == old_name.to_string_lossy()
+        {
+            let _ = fs::remove_file(&current_file);
         }
     }
     Ok(())
