@@ -548,12 +548,15 @@ fn draw(
                     }
                     if let Some(u) = usage
                         && u.status == crate::usage::UsageStatus::Ok
-                        && let (Some(h5), Some(d7)) = (&u.five_hour, &u.seven_day)
                     {
-                        spans.push(Span::styled(
-                            format!("  [5h: {:.0}% | 7d: {:.0}%]", h5.pct, d7.pct),
-                            Style::default().fg(Color::Cyan),
-                        ));
+                        if let Some(h5) = &u.five_hour {
+                            spans.push(Span::styled("  5h ", Style::default().fg(Color::Rgb(148, 163, 184))));
+                            spans.extend(crate::usage::render_tui_progress_spans(h5.pct, 6));
+                        }
+                        if let Some(d7) = &u.seven_day {
+                            spans.push(Span::styled("  7d ", Style::default().fg(Color::Rgb(148, 163, 184))));
+                            spans.extend(crate::usage::render_tui_progress_spans(d7.pct, 6));
+                        }
                     }
                     if *is_disabled {
                         spans.push(Span::styled(
@@ -603,49 +606,55 @@ fn draw(
         );
     f.render_stateful_widget(list, chunks[2], state);
 
-    let (bottom_text, bottom_style) = match mode {
+    let bottom_spans: Vec<Span<'static>> = match mode {
         Mode::Picking => {
             match status {
-                Some(StatusMessage::Error(e)) => (format!("Error: {e}"), Style::default().fg(Color::Red)),
-                Some(StatusMessage::Info(msg)) => (msg.clone(), Style::default().fg(Color::Green)),
+                Some(StatusMessage::Error(e)) => vec![Span::styled(format!("Error: {e}"), Style::default().fg(Color::Red))],
+                Some(StatusMessage::Info(msg)) => vec![Span::styled(msg.clone(), Style::default().fg(Color::Green))],
                 None => {
                     if let Some(Item::Profile { usage: Some(u), .. }) = items.get(state.selected().unwrap_or(0)) {
                         match u.status {
                             crate::usage::UsageStatus::Ok => {
-                                let h5_str = u.five_hour.as_ref().map(|h| {
-                                    let bar = crate::usage::render_progress_bar(h.pct, 10);
-                                    let rst = h.countdown.as_deref().unwrap_or("?");
-                                    format!("5h: {bar} ({rst})")
-                                }).unwrap_or_default();
-
-                                let d7_str = u.seven_day.as_ref().map(|d| {
-                                    let bar = crate::usage::render_progress_bar(d.pct, 10);
-                                    let rst = d.countdown.as_deref().unwrap_or("?");
-                                    format!("7d: {bar} ({rst})")
-                                }).unwrap_or_default();
-
-                                (format!("Quota: {h5_str}  |  {d7_str}"), Style::default().fg(Color::White))
+                                let mut spans = vec![Span::styled("Quota: ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD))];
+                                if let Some(h5) = &u.five_hour {
+                                    spans.push(Span::styled("5h Limit ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                                    spans.extend(crate::usage::render_tui_progress_spans(h5.pct, 12));
+                                    if let Some(rst) = &h5.countdown {
+                                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                                    }
+                                }
+                                if let Some(d7) = &u.seven_day {
+                                    if u.five_hour.is_some() {
+                                        spans.push(Span::styled("   •   ", Style::default().fg(border_color)));
+                                    }
+                                    spans.push(Span::styled("7d Limit ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                                    spans.extend(crate::usage::render_tui_progress_spans(d7.pct, 12));
+                                    if let Some(rst) = &d7.countdown {
+                                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                                    }
+                                }
+                                spans
                             }
                             crate::usage::UsageStatus::TokenExpired => {
-                                ("Quota: OAuth token expired (select & launch to re-authenticate)".to_string(), Style::default().fg(Color::Yellow))
+                                vec![Span::styled("Quota: OAuth token expired (select & launch to re-authenticate)", Style::default().fg(Color::Yellow))]
                             }
                             crate::usage::UsageStatus::RateLimited => {
-                                ("Quota: Rate-limited on Anthropic usage endpoint (429)".to_string(), Style::default().fg(Color::Yellow))
+                                vec![Span::styled("Quota: Rate-limited on Anthropic usage endpoint (429)", Style::default().fg(Color::Yellow))]
                             }
                             crate::usage::UsageStatus::NoUsageAccess => {
-                                ("Quota: Account tier does not report OAuth usage quota".to_string(), Style::default().fg(Color::DarkGray))
+                                vec![Span::styled("Quota: Account tier does not report OAuth usage quota", Style::default().fg(Color::DarkGray))]
                             }
                             crate::usage::UsageStatus::Unavailable => {
                                 match current_profile {
-                                    Some(curr) => (format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""), Style::default()),
-                                    None => ("Select a profile and press Enter.".to_string(), Style::default()),
+                                    Some(curr) => vec![Span::raw(format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""))],
+                                    None => vec![Span::raw("Select a profile and press Enter.")],
                                 }
                             }
                         }
                     } else {
                         match current_profile {
-                            Some(curr) => (format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""), Style::default()),
-                            None => ("Select a profile and press Enter.".to_string(), Style::default()),
+                            Some(curr) => vec![Span::raw(format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""))],
+                            None => vec![Span::raw("Select a profile and press Enter.")],
                         }
                     }
                 }
@@ -658,16 +667,16 @@ fn draw(
                 _ => "Name",
             };
             match status {
-                Some(StatusMessage::Error(e)) => (format!("{label}: {buffer}_   ({e})"), Style::default().fg(Color::Red)),
-                _ => (format!("{label}: {buffer}_   (Enter to confirm, Esc to cancel)"), Style::default().fg(Color::White)),
+                Some(StatusMessage::Error(e)) => vec![Span::styled(format!("{label}: {buffer}_   ({e})"), Style::default().fg(Color::Red))],
+                _ => vec![Span::styled(format!("{label}: {buffer}_   (Enter to confirm, Esc to cancel)"), Style::default().fg(Color::White))],
             }
         }
         Mode::ConfirmDelete { name } => {
-            (format!("Delete profile \"{name}\"? This removes its stored login. [y/N]"), Style::default().fg(Color::Yellow))
+            vec![Span::styled(format!("Delete profile \"{name}\"? This removes its stored login. [y/N]"), Style::default().fg(Color::Yellow))]
         }
     };
 
-    let bottom = Paragraph::new(Line::from(Span::styled(bottom_text, bottom_style)))
+    let bottom = Paragraph::new(Line::from(bottom_spans))
         .block(
             Block::default()
                 .borders(Borders::ALL)

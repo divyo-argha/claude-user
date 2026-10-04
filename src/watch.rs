@@ -213,25 +213,24 @@ fn draw_watch(
 
             match &it.usage {
                 Some(u) if u.status == UsageStatus::Ok => {
-                    let h5_str = u.five_hour.as_ref().map(|h| {
-                        let bar = usage::render_progress_bar(h.pct, 10);
-                        let rst = h.countdown.as_deref().unwrap_or("?");
-                        format!("5h: {bar} ({rst})")
-                    }).unwrap_or_default();
-
-                    let d7_str = u.seven_day.as_ref().map(|d| {
-                        let bar = usage::render_progress_bar(d.pct, 10);
-                        let rst = d.countdown.as_deref().unwrap_or("?");
-                        format!("7d: {bar} ({rst})")
-                    }).unwrap_or_default();
-
-                    spans.push(Span::styled(format!(" {h5_str}   {d7_str}"), Style::default().fg(Color::Cyan)));
+                    if let Some(h5) = &u.five_hour {
+                        spans.push(Span::styled(" 5h ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                        spans.extend(usage::render_tui_progress_spans(h5.pct, 10));
+                        let rst = h5.countdown.as_deref().unwrap_or("?");
+                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                    }
+                    if let Some(d7) = &u.seven_day {
+                        spans.push(Span::styled("   7d ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                        spans.extend(usage::render_tui_progress_spans(d7.pct, 10));
+                        let rst = d7.countdown.as_deref().unwrap_or("?");
+                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                    }
                 }
                 Some(u) if u.status == UsageStatus::RateLimited => {
-                    spans.push(Span::styled(" [Rate-Limited 429]", Style::default().fg(Color::Yellow)));
+                    spans.push(Span::styled(" [Rate-Limited 429]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
                 }
                 Some(u) if u.status == UsageStatus::TokenExpired => {
-                    spans.push(Span::styled(" [OAuth Token Expired]", Style::default().fg(Color::Red)));
+                    spans.push(Span::styled(" [OAuth Token Expired]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
                 }
                 _ => {
                     spans.push(Span::styled(" [Usage Unavailable]", Style::default().fg(Color::DarkGray)));

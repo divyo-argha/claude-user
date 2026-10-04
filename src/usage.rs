@@ -7,6 +7,8 @@ use std::path::PathBuf;
 
 use crate::oauth;
 use crate::profiles;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Span;
 
 const USAGE_API_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CACHE_TTL_SECS: i64 = 300; // 5 minutes
@@ -119,6 +121,85 @@ pub fn render_progress_bar(pct: f64, width: usize) -> String {
     let filled = ((clamped / 100.0) * (width as f64)).round() as usize;
     let empty = width.saturating_sub(filled);
     format!("[{}{}] {:>3.0}%", "█".repeat(filled), "░".repeat(empty), clamped)
+}
+
+pub fn is_no_color() -> bool {
+    std::env::var_os("NO_COLOR").is_some()
+}
+
+pub fn pct_color_ansi(pct: f64) -> (&'static str, &'static str) {
+    let clamped = pct.clamp(0.0, 100.0);
+    let code = if clamped >= 85.0 {
+        "\x1b[38;2;248;113;113m" // Coral Red (#f87171)
+    } else if clamped >= 60.0 {
+        "\x1b[38;2;250;204;21m" // Amber / Yellow (#facc15)
+    } else {
+        "\x1b[38;2;74;222;128m" // Fresh Green (#4ade80)
+    };
+    (code, "\x1b[0m")
+}
+
+pub fn render_colored_progress_bar(pct: f64, width: usize) -> String {
+    if is_no_color() {
+        return render_progress_bar(pct, width);
+    }
+    let clamped = pct.clamp(0.0, 100.0);
+    let filled = ((clamped / 100.0) * (width as f64)).round() as usize;
+    let empty = width.saturating_sub(filled);
+
+    let (fg, reset) = pct_color_ansi(clamped);
+    let bracket = "\x1b[38;2;100;116;139m"; // Slate 500
+    let track = "\x1b[38;2;71;85;105m";     // Slate 600
+
+    format!(
+        "{bracket}[{reset}{fg}{}{reset}{track}{}{reset}{bracket}]{reset} {fg}{clamped:>3.0}%{reset}",
+        "█".repeat(filled),
+        "░".repeat(empty)
+    )
+}
+
+pub fn format_countdown_cli(countdown: Option<&str>) -> String {
+    match countdown {
+        Some(c) => {
+            if is_no_color() {
+                format!(" (resets in {c})")
+            } else {
+                format!(" \x1b[38;2;56;189;248m(resets in {c})\x1b[0m")
+            }
+        }
+        None => String::new(),
+    }
+}
+
+pub fn progress_color_ratatui(pct: f64) -> Color {
+    let clamped = pct.clamp(0.0, 100.0);
+    if clamped >= 85.0 {
+        Color::Rgb(248, 113, 113) // Red
+    } else if clamped >= 60.0 {
+        Color::Rgb(250, 204, 21) // Amber / Yellow
+    } else {
+        Color::Rgb(74, 222, 128) // Green
+    }
+}
+
+pub fn render_tui_progress_spans(pct: f64, width: usize) -> Vec<Span<'static>> {
+    let clamped = pct.clamp(0.0, 100.0);
+    let filled = ((clamped / 100.0) * (width as f64)).round() as usize;
+    let empty = width.saturating_sub(filled);
+    let color = progress_color_ratatui(clamped);
+
+    let bracket_style = Style::default().fg(Color::Rgb(100, 116, 139));
+    let filled_style = Style::default().fg(color);
+    let empty_style = Style::default().fg(Color::Rgb(71, 85, 105));
+    let text_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+
+    vec![
+        Span::styled("[", bracket_style),
+        Span::styled("█".repeat(filled), filled_style),
+        Span::styled("░".repeat(empty), empty_style),
+        Span::styled("] ", bracket_style),
+        Span::styled(format!("{:>3.0}%", clamped), text_style),
+    ]
 }
 
 pub fn get_profile_usage(profile: &str, force_refresh: bool) -> Result<AccountUsage> {
@@ -444,6 +525,53 @@ mod tests {
 
         let bar_clamp = render_progress_bar(150.0, 10);
         assert_eq!(bar_clamp, "[██████████] 100%");
+    }
+
+    #[test]
+    fn test_render_colored_progress_bar() {
+        let bar = render_colored_progress_bar(40.0, 10);
+        assert!(bar.contains("████"));
+        assert!(bar.contains("░░░░░░"));
+        assert!(bar.contains("40%"));
+
+        let bar_amber = render_colored_progress_bar(70.0, 10);
+        assert!(bar_amber.contains("███████"));
+        assert!(bar_amber.contains("70%"));
+
+        let bar_red = render_colored_progress_bar(90.0, 10);
+        assert!(bar_red.contains("█████████"));
+        assert!(bar_red.contains("90%"));
+
+        if !is_no_color() {
+            assert!(bar.contains("\x1b[38;2;74;222;128m"));
+            assert!(bar_amber.contains("\x1b[38;2;250;204;21m"));
+            assert!(bar_red.contains("\x1b[38;2;248;113;113m"));
+        }
+    }
+
+    #[test]
+    fn test_render_tui_progress_spans() {
+        let spans_green = render_tui_progress_spans(30.0, 10);
+        assert_eq!(spans_green.len(), 5);
+        assert_eq!(spans_green[0].content, "[");
+        assert_eq!(spans_green[1].content, "███");
+        assert_eq!(spans_green[1].style.fg, Some(Color::Rgb(74, 222, 128)));
+        assert_eq!(spans_green[2].content, "░░░░░░░");
+        assert_eq!(spans_green[3].content, "] ");
+        assert_eq!(spans_green[4].content, " 30%");
+
+        let spans_amber = render_tui_progress_spans(65.0, 10);
+        assert_eq!(spans_amber[1].style.fg, Some(Color::Rgb(250, 204, 21)));
+
+        let spans_red = render_tui_progress_spans(92.0, 10);
+        assert_eq!(spans_red[1].style.fg, Some(Color::Rgb(248, 113, 113)));
+    }
+
+    #[test]
+    fn test_format_countdown_cli() {
+        assert_eq!(format_countdown_cli(None), "");
+        let rst = format_countdown_cli(Some("1h 30m"));
+        assert!(rst.contains("1h 30m"));
     }
 
     #[test]

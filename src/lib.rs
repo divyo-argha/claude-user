@@ -314,39 +314,29 @@ fn cmd_usage(args: &[String], is_json: bool, force_refresh: bool) -> Result<()> 
         usage::UsageStatus::Ok => {
             println!("\nQuota & Rate Limits:");
             if let Some(h5) = &u.five_hour {
-                let bar = usage::render_progress_bar(h5.pct, 20);
-                let rst = h5
-                    .countdown
-                    .as_deref()
-                    .map(|c| format!(" (resets in {c})"))
-                    .unwrap_or_default();
+                let bar = usage::render_colored_progress_bar(h5.pct, 20);
+                let rst = usage::format_countdown_cli(h5.countdown.as_deref());
                 println!("  5-Hour Limit:  {bar}{rst}");
             }
             if let Some(d7) = &u.seven_day {
-                let bar = usage::render_progress_bar(d7.pct, 20);
-                let rst = d7
-                    .countdown
-                    .as_deref()
-                    .map(|c| format!(" (resets in {c})"))
-                    .unwrap_or_default();
+                let bar = usage::render_colored_progress_bar(d7.pct, 20);
+                let rst = usage::format_countdown_cli(d7.countdown.as_deref());
                 println!("  7-Day Limit:   {bar}{rst}");
             }
             if let Some(sp) = &u.spend {
-                let bar = usage::render_progress_bar(sp.pct, 20);
-                println!(
-                    "  Extra Spend:   {bar} (${:.2} used of ${:.2} limit)",
-                    sp.used, sp.limit
-                );
+                let bar = usage::render_colored_progress_bar(sp.pct, 20);
+                let detail = if usage::is_no_color() {
+                    format!("(${:.2} used of ${:.2} limit)", sp.used, sp.limit)
+                } else {
+                    format!("\x1b[38;2;148;163;184m(${:.2} used of ${:.2} limit)\x1b[0m", sp.used, sp.limit)
+                };
+                println!("  Extra Spend:   {bar} {detail}");
             }
             if !u.models.is_empty() {
                 println!("\nPer-Model Weekly Limits:");
                 for m in &u.models {
-                    let bar = usage::render_progress_bar(m.pct, 20);
-                    let rst = m
-                        .countdown
-                        .as_deref()
-                        .map(|c| format!(" (resets in {c})"))
-                        .unwrap_or_default();
+                    let bar = usage::render_colored_progress_bar(m.pct, 20);
+                    let rst = usage::format_countdown_cli(m.countdown.as_deref());
                     println!("  {:<14} {bar}{rst}", m.name);
                 }
             }
@@ -522,21 +512,13 @@ fn cmd_list(is_json: bool, force_refresh: bool, token_status: bool) -> Result<()
                 match u.status {
                     usage::UsageStatus::Ok => {
                         if let Some(h5) = &u.five_hour {
-                            let bar = usage::render_progress_bar(h5.pct, 16);
-                            let rst = h5
-                                .countdown
-                                .as_deref()
-                                .map(|c| format!(" (resets in {c})"))
-                                .unwrap_or_default();
+                            let bar = usage::render_colored_progress_bar(h5.pct, 16);
+                            let rst = usage::format_countdown_cli(h5.countdown.as_deref());
                             println!("    5h quota:  {bar}{rst}");
                         }
                         if let Some(d7) = &u.seven_day {
-                            let bar = usage::render_progress_bar(d7.pct, 16);
-                            let rst = d7
-                                .countdown
-                                .as_deref()
-                                .map(|c| format!(" (resets in {c})"))
-                                .unwrap_or_default();
+                            let bar = usage::render_colored_progress_bar(d7.pct, 16);
+                            let rst = usage::format_countdown_cli(d7.countdown.as_deref());
                             println!("    7d quota:  {bar}{rst}");
                         }
                     }
@@ -631,21 +613,13 @@ fn cmd_current(is_json: bool, force_refresh: bool) -> Result<()> {
                 && u.status == usage::UsageStatus::Ok
             {
                 if let Some(h5) = &u.five_hour {
-                    let bar = usage::render_progress_bar(h5.pct, 16);
-                    let rst = h5
-                        .countdown
-                        .as_deref()
-                        .map(|c| format!(" (resets in {c})"))
-                        .unwrap_or_default();
+                    let bar = usage::render_colored_progress_bar(h5.pct, 16);
+                    let rst = usage::format_countdown_cli(h5.countdown.as_deref());
                     println!("  5h quota:  {bar}{rst}");
                 }
                 if let Some(d7) = &u.seven_day {
-                    let bar = usage::render_progress_bar(d7.pct, 16);
-                    let rst = d7
-                        .countdown
-                        .as_deref()
-                        .map(|c| format!(" (resets in {c})"))
-                        .unwrap_or_default();
+                    let bar = usage::render_colored_progress_bar(d7.pct, 16);
+                    let rst = usage::format_countdown_cli(d7.countdown.as_deref());
                     println!("  7d quota:  {bar}{rst}");
                 }
             }
