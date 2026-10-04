@@ -1,8 +1,10 @@
 pub mod launch;
 pub mod mappings;
+pub mod oauth;
 pub mod profiles;
 pub mod tui;
 pub mod update;
+pub mod usage;
 
 use anyhow::{anyhow, bail, Result};
 use serde::Serialize;
@@ -13,12 +15,13 @@ const HELP: &str = "\
 claude-user — switch between Claude accounts (alias: cuser)
 
 USAGE:
-    claude-user                    open the interactive profile picker
+    claude-user                    open the interactive profile picker with live quota
     claude-user <profile>          launch that profile directly (created if new)
     claude-user <profile> [args]   launch that profile, passing [args] to `claude`
     claude-user run [args]         launch profile mapped to current directory
-    claude-user list | -l [--json] list existing profiles
-    claude-user current [--json]   show the profile currently pointed to by `claude`
+    claude-user list | -l          list existing profiles with 5h/7d usage limits
+    claude-user usage [profile]    show detailed quota and rate limit breakdown
+    claude-user current            show the profile currently pointed to by `claude`
     claude-user map [profile] [dir] bind a directory to a profile (or list mappings)
     claude-user unmap [dir]        remove a directory mapping
     claude-user disable <profile>  hold a profile out of rotation
@@ -30,6 +33,10 @@ USAGE:
     claude-user --update           update claude-user to the latest release
     claude-user --version | -v     show the installed version
     claude-user --help | -h        show this help
+
+FLAGS:
+    --json                         output results in machine-readable JSON
+    --refresh                      bypass 5-minute cache and fetch live usage from API
 
 The picker (plain `claude-user` / `cuser`) also offers \"+ Import ~/.claude\" whenever a
 default ~/.claude exists, and \"+ New profile\" to log into a brand-new account.
@@ -49,6 +56,7 @@ struct ProfileListEntry {
     email: Option<String>,
     org_name: Option<String>,
     mapped_paths: Vec<String>,
+    usage: Option<usage::AccountUsage>,
 }
 
 #[derive(Serialize)]
@@ -65,6 +73,7 @@ struct CurrentOutput {
     org_name: Option<String>,
     mapped_to_cwd: bool,
     cwd: String,
+    usage: Option<usage::AccountUsage>,
 }
 
 pub fn run() -> Result<()> {
@@ -73,6 +82,9 @@ pub fn run() -> Result<()> {
     if args.is_empty() {
         return run_picker();
     }
+
+    let is_json = args.iter().any(|a| a == "--json");
+    let force_refresh = args.iter().any(|a| a == "--refresh");
 
     match args[0].as_str() {
         "--help" | "-h" | "help" => {
@@ -83,21 +95,23 @@ pub fn run() -> Result<()> {
             println!("claude-user {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        "list" | "-l" => {
-            let is_json = args.iter().any(|a| a == "--json");
-            cmd_list(is_json)
-        }
-        "current" | "active" | "status" => {
-            let is_json = args.iter().any(|a| a == "--json");
-            cmd_current(is_json)
-        }
-        "run" => cmd_run(&args[1..]),
-        "map" => {
-            let is_json = args.iter().any(|a| a == "--json");
+        "list" | "-l" => cmd_list(is_json, force_refresh),
+        "usage" | "quota" => {
             let filtered: Vec<String> = args
                 .iter()
                 .skip(1)
-                .filter(|a| *a != "--json")
+                .filter(|a| *a != "--json" && *a != "--refresh")
+                .cloned()
+                .collect();
+            cmd_usage(&filtered, is_json, force_refresh)
+        }
+        "current" | "active" | "status" => cmd_current(is_json, force_refresh),
+        "run" => cmd_run(&args[1..]),
+        "map" => {
+            let filtered: Vec<String> = args
+                .iter()
+                .skip(1)
+                .filter(|a| *a != "--json" && *a != "--refresh")
                 .cloned()
                 .collect();
             cmd_map(&filtered, is_json)
@@ -110,7 +124,7 @@ pub fn run() -> Result<()> {
         "remove" | "rm" | "delete" => cmd_remove(args.get(1).cloned()),
         "rename" => cmd_rename(args.get(1).cloned(), args.get(2).cloned()),
         "--update" | "update" => update::run(),
-        "--json" => cmd_list(true),
+        "--json" => cmd_list(true, force_refresh),
         name => {
             profiles::validate_profile_name(name)?;
             if !profiles::profile_exists(name)? {
@@ -172,6 +186,94 @@ fn cmd_run(args: &[String]) -> Result<()> {
             cwd.display()
         );
     }
+}
+
+fn cmd_usage(args: &[String], is_json: bool, force_refresh: bool) -> Result<()> {
+    let target_profile = args
+        .first()
+        .cloned()
+        .or_else(|| profiles::current_profile().ok().flatten());
+
+    let Some(profile) = target_profile else {
+        bail!("no profile specified and no active profile is set.\nUsage: `cuser usage <profile>` or `cuser list`");
+    };
+
+    if !profiles::profile_exists(&profile)? {
+        bail!("profile \"{profile}\" does not exist");
+    }
+
+    let u = usage::get_profile_usage(&profile, force_refresh)?;
+
+    if is_json {
+        println!("{}", serde_json::to_string_pretty(&u)?);
+        return Ok(());
+    }
+
+    let info = profiles::get_profile_info(&profile)?;
+    let email_part = match (info.email, info.org_name) {
+        (Some(e), Some(o)) => format!(" ({e} • {o})"),
+        (Some(e), None) => format!(" ({e})"),
+        _ => String::new(),
+    };
+
+    println!("Profile: {profile}{email_part}");
+    match u.status {
+        usage::UsageStatus::Ok => {
+            println!("\nQuota & Rate Limits:");
+            if let Some(h5) = &u.five_hour {
+                let bar = usage::render_progress_bar(h5.pct, 20);
+                let rst = h5
+                    .countdown
+                    .as_deref()
+                    .map(|c| format!(" (resets in {c})"))
+                    .unwrap_or_default();
+                println!("  5-Hour Limit:  {bar}{rst}");
+            }
+            if let Some(d7) = &u.seven_day {
+                let bar = usage::render_progress_bar(d7.pct, 20);
+                let rst = d7
+                    .countdown
+                    .as_deref()
+                    .map(|c| format!(" (resets in {c})"))
+                    .unwrap_or_default();
+                println!("  7-Day Limit:   {bar}{rst}");
+            }
+            if let Some(sp) = &u.spend {
+                let bar = usage::render_progress_bar(sp.pct, 20);
+                println!(
+                    "  Extra Spend:   {bar} (${:.2} used of ${:.2} limit)",
+                    sp.used, sp.limit
+                );
+            }
+            if !u.models.is_empty() {
+                println!("\nPer-Model Weekly Limits:");
+                for m in &u.models {
+                    let bar = usage::render_progress_bar(m.pct, 20);
+                    let rst = m
+                        .countdown
+                        .as_deref()
+                        .map(|c| format!(" (resets in {c})"))
+                        .unwrap_or_default();
+                    println!("  {:<14} {bar}{rst}", m.name);
+                }
+            }
+        }
+        usage::UsageStatus::RateLimited => {
+            println!("  Status: Rate-limited on Anthropic usage endpoint (429). Retrying later.");
+        }
+        usage::UsageStatus::TokenExpired => {
+            println!("  Status: OAuth token expired. Launch `cuser {profile}` to renew login.");
+        }
+        usage::UsageStatus::NoUsageAccess => {
+            println!("  Status: Account tier or organization does not expose OAuth usage endpoint.");
+        }
+        usage::UsageStatus::Unavailable => {
+            let msg = u.error_message.as_deref().unwrap_or("unknown error");
+            println!("  Status: Unavailable ({msg})");
+        }
+    }
+
+    Ok(())
 }
 
 fn cmd_map(args: &[String], is_json: bool) -> Result<()> {
@@ -259,7 +361,7 @@ fn cmd_enable(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_list(is_json: bool) -> Result<()> {
+fn cmd_list(is_json: bool, force_refresh: bool) -> Result<()> {
     let names = profiles::list_profiles()?;
     let current = profiles::current_profile()?;
 
@@ -271,6 +373,7 @@ fn cmd_list(is_json: bool) -> Result<()> {
                 .into_iter()
                 .map(|p| p.to_string_lossy().into_owned())
                 .collect();
+            let u = usage::get_profile_usage(name, force_refresh).ok();
             list.push(ProfileListEntry {
                 name: name.clone(),
                 is_current: current.as_deref() == Some(name),
@@ -278,6 +381,7 @@ fn cmd_list(is_json: bool) -> Result<()> {
                 email: info.email,
                 org_name: info.org_name,
                 mapped_paths,
+                usage: u,
             });
         }
         let out = ListOutput {
@@ -303,12 +407,51 @@ fn cmd_list(is_json: bool) -> Result<()> {
                 (Some(email), None) => println!("{name}  ({email}){disabled_badge}{badge}"),
                 (None, _) => println!("{name}{disabled_badge}{badge}"),
             }
+
+            if let Ok(u) = usage::get_profile_usage(&name, force_refresh) {
+                match u.status {
+                    usage::UsageStatus::Ok => {
+                        if let Some(h5) = &u.five_hour {
+                            let bar = usage::render_progress_bar(h5.pct, 16);
+                            let rst = h5
+                                .countdown
+                                .as_deref()
+                                .map(|c| format!(" (resets in {c})"))
+                                .unwrap_or_default();
+                            println!("    5h quota:  {bar}{rst}");
+                        }
+                        if let Some(d7) = &u.seven_day {
+                            let bar = usage::render_progress_bar(d7.pct, 16);
+                            let rst = d7
+                                .countdown
+                                .as_deref()
+                                .map(|c| format!(" (resets in {c})"))
+                                .unwrap_or_default();
+                            println!("    7d quota:  {bar}{rst}");
+                        }
+                    }
+                    usage::UsageStatus::TokenExpired => {
+                        println!("    usage:     [token expired - run `cuser {name}` to renew]");
+                    }
+                    usage::UsageStatus::RateLimited => {
+                        println!("    usage:     [rate-limited (429) - retrying later]");
+                    }
+                    usage::UsageStatus::NoUsageAccess => {
+                        println!("    usage:     [OAuth usage API not supported for this account tier]");
+                    }
+                    usage::UsageStatus::Unavailable => {
+                        if let Some(err) = &u.error_message {
+                            println!("    usage:     [{err}]");
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())
 }
 
-fn cmd_current(is_json: bool) -> Result<()> {
+fn cmd_current(is_json: bool, force_refresh: bool) -> Result<()> {
     let current = profiles::current_profile()?;
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let cwd_str = cwd.to_string_lossy().into_owned();
@@ -319,6 +462,12 @@ fn cmd_current(is_json: bool) -> Result<()> {
             .unwrap_or(false)
     } else {
         false
+    };
+
+    let usage_val = if let Some(ref name) = current {
+        usage::get_profile_usage(name, force_refresh).ok()
+    } else {
+        None
     };
 
     if is_json {
@@ -336,6 +485,7 @@ fn cmd_current(is_json: bool) -> Result<()> {
             org_name,
             mapped_to_cwd,
             cwd: cwd_str,
+            usage: usage_val,
         };
         println!("{}", serde_json::to_string_pretty(&out)?);
         return Ok(());
@@ -351,6 +501,29 @@ fn cmd_current(is_json: bool) -> Result<()> {
                 (None, _) => String::new(),
             };
             println!("{name}{details}{disabled_note}");
+
+            if let Some(u) = usage_val
+                && u.status == usage::UsageStatus::Ok
+            {
+                if let Some(h5) = &u.five_hour {
+                    let bar = usage::render_progress_bar(h5.pct, 16);
+                    let rst = h5
+                        .countdown
+                        .as_deref()
+                        .map(|c| format!(" (resets in {c})"))
+                        .unwrap_or_default();
+                    println!("  5h quota:  {bar}{rst}");
+                }
+                if let Some(d7) = &u.seven_day {
+                    let bar = usage::render_progress_bar(d7.pct, 16);
+                    let rst = d7
+                        .countdown
+                        .as_deref()
+                        .map(|c| format!(" (resets in {c})"))
+                        .unwrap_or_default();
+                    println!("  7d quota:  {bar}{rst}");
+                }
+            }
         }
         None => {
             println!("No active profile (running `claude` in terminal uses default ~/.claude).");

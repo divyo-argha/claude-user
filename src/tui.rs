@@ -45,6 +45,7 @@ enum Item {
         is_current: bool,
         is_disabled: bool,
         is_mapped: bool,
+        usage: Option<Box<crate::usage::AccountUsage>>,
     },
     ImportDefault,
     NewProfile,
@@ -95,12 +96,14 @@ fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
             (Some(email), None) => format!("{name}  ({email})"),
             (None, _) => name.clone(),
         };
+        let usage_data = crate::usage::get_profile_usage(&name, false).ok().map(Box::new);
         items.push(Item::Profile {
             name,
             display,
             is_current,
             is_disabled,
             is_mapped,
+            usage: usage_data,
         });
     }
 
@@ -356,7 +359,7 @@ fn draw(
             let prefix = if is_selected { " ▶ " } else { "   " };
 
             match item {
-                Item::Profile { display, is_current, is_disabled, is_mapped, .. } => {
+                Item::Profile { display, is_current, is_disabled, is_mapped, usage, .. } => {
                     let style = if is_selected {
                         Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
                     } else if *is_disabled {
@@ -379,6 +382,15 @@ fn draw(
                         spans.push(Span::styled(
                             "  ★ mapped",
                             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        ));
+                    }
+                    if let Some(u) = usage
+                        && u.status == crate::usage::UsageStatus::Ok
+                        && let (Some(h5), Some(d7)) = (&u.five_hour, &u.seven_day)
+                    {
+                        spans.push(Span::styled(
+                            format!("  [5h: {:.0}% | 7d: {:.0}%]", h5.pct, d7.pct),
+                            Style::default().fg(Color::Cyan),
                         ));
                     }
                     if *is_disabled {
@@ -430,13 +442,49 @@ fn draw(
     f.render_stateful_widget(list, chunks[2], state);
 
     let bottom_text = match mode {
-        Mode::Picking => error
-            .clone()
-            .map(|e| format!("Error: {e}"))
-            .unwrap_or_else(|| match current_profile {
-                Some(curr) => format!("Select profile & press Enter. Running `claude` in terminal uses: \"{curr}\""),
-                None => "Select a profile and press Enter.".to_string(),
-            }),
+        Mode::Picking => {
+            if let Some(e) = error {
+                format!("Error: {e}")
+            } else if let Some(Item::Profile { usage: Some(u), .. }) = items.get(state.selected().unwrap_or(0)) {
+                match u.status {
+                    crate::usage::UsageStatus::Ok => {
+                        let h5_str = u.five_hour.as_ref().map(|h| {
+                            let bar = crate::usage::render_progress_bar(h.pct, 10);
+                            let rst = h.countdown.as_deref().unwrap_or("?");
+                            format!("5h: {bar} ({rst})")
+                        }).unwrap_or_default();
+
+                        let d7_str = u.seven_day.as_ref().map(|d| {
+                            let bar = crate::usage::render_progress_bar(d.pct, 10);
+                            let rst = d.countdown.as_deref().unwrap_or("?");
+                            format!("7d: {bar} ({rst})")
+                        }).unwrap_or_default();
+
+                        format!("Quota: {h5_str}  |  {d7_str}")
+                    }
+                    crate::usage::UsageStatus::TokenExpired => {
+                        "Quota: OAuth token expired (select & launch to re-authenticate)".to_string()
+                    }
+                    crate::usage::UsageStatus::RateLimited => {
+                        "Quota: Rate-limited on Anthropic usage endpoint (429)".to_string()
+                    }
+                    crate::usage::UsageStatus::NoUsageAccess => {
+                        "Quota: Account tier does not report OAuth usage quota".to_string()
+                    }
+                    crate::usage::UsageStatus::Unavailable => {
+                        match current_profile {
+                            Some(curr) => format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""),
+                            None => "Select a profile and press Enter.".to_string(),
+                        }
+                    }
+                }
+            } else {
+                match current_profile {
+                    Some(curr) => format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""),
+                    None => "Select a profile and press Enter.".to_string(),
+                }
+            }
+        }
         Mode::Naming { action, buffer } => {
             let label = match action {
                 Action::Rename { .. } => "New name",
