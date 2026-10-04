@@ -1,10 +1,14 @@
 pub mod aliases;
 pub mod auto;
 pub mod completions;
+pub mod doctor;
 pub mod launch;
 pub mod mappings;
+pub mod notify;
 pub mod oauth;
 pub mod profiles;
+pub mod prompt;
+pub mod service;
 pub mod settings;
 pub mod switch;
 pub mod token;
@@ -12,6 +16,7 @@ pub mod transfer;
 pub mod tui;
 pub mod update;
 pub mod usage;
+pub mod watch;
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
@@ -29,7 +34,10 @@ USAGE:
     claude-user run [prof] [args]  launch in isolated session mode (or directory-mapped profile)
     claude-user list | -l          list existing profiles with 5h/7d usage limits
     claude-user usage [profile]    show detailed quota and rate limit breakdown
+    claude-user watch [interval]   live auto-refreshing quota monitor dashboard
+    claude-user prompt [flags]     zero-latency status for shell prompts (Starship/zsh/tmux)
     claude-user auto [flags]       auto-rotate accounts before hitting rate limits
+    claude-user doctor [--fix]     diagnose CLI, tokens, symlinks, permissions & auto-repair
     claude-user alias [prof] [ali] assign short alias to a profile (or list all aliases)
     claude-user unalias <alias>    remove a profile alias
     claude-user config [get|set]   view and edit tool settings (e.g. autoswitch)
@@ -168,6 +176,23 @@ pub fn run() -> Result<()> {
         "import" | "migrate" => cmd_import(&args[1..]),
         "remove" | "rm" | "delete" => cmd_remove(args.get(1).cloned()),
         "rename" => cmd_rename(args.get(1).cloned(), args.get(2).cloned()),
+        "watch" | "top" => {
+            let interval = args
+                .iter()
+                .skip(1)
+                .find_map(|a| a.parse::<u64>().ok())
+                .unwrap_or(10);
+            watch::run_watch(interval)
+        }
+        "prompt" => {
+            let short = args.iter().any(|a| a == "--short" || a == "-s");
+            let full = args.iter().any(|a| a == "--full");
+            prompt::print_prompt(short, full, is_json)
+        }
+        "doctor" | "check" => {
+            let auto_fix = args.iter().any(|a| a == "--fix");
+            doctor::run_doctor(auto_fix)
+        }
         "purge" => cmd_purge(),
         "completions" => completions::print_completions(args.get(1).map(|s| s.as_str()).unwrap_or("")),
         "--update" | "update" => update::run(),

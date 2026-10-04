@@ -41,7 +41,7 @@ pub fn can_import() -> Result<bool> {
         || (claude_json.exists() && !is_symlink(&claude_json)))
 }
 
-fn is_symlink(path: &Path) -> bool {
+pub fn is_symlink(path: &Path) -> bool {
     path.symlink_metadata()
         .map(|m| m.file_type().is_symlink())
         .unwrap_or(false)

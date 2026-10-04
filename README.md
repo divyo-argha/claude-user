@@ -131,10 +131,22 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 | Command | Description | Example |
 | :--- | :--- | :--- |
 | `cuser usage [profile]` | Show detailed 5-hour, 7-day, extra spend, and per-model limits | `cuser usage work` |
+| `cuser watch [interval]` | Live auto-refreshing quota monitor dashboard (htop for Claude accounts) | `cuser watch 5` |
 | `cuser auto` | Monitor active account and auto-rotate before hitting rate limits | `cuser auto --threshold 85` |
 | `cuser auto --once` | Run a single auto-switch check (exit `0` switched, `2` healthy, `3` blocked) | `cuser auto --once --strategy consume-first` |
 | `cuser auto --model <name>` | Also rotate when specific model weekly limit exceeds threshold | `cuser auto --model Fable` |
+| `cuser auto --install-service` | Install persistent background rate-limit protector (launchd on macOS / systemd on Linux) | `cuser auto --install-service` |
+| `cuser auto --service-status` | Check if background rate-limit service is running | `cuser auto --service-status` |
+| `cuser auto --uninstall-service` | Stop and remove the background daemon service | `cuser auto --uninstall-service` |
 | `cuser import-usage <file\|->` | Import usage snapshot readings from another machine | `cuser import-usage usage.json` |
+
+### Diagnostics & Shell Integrations
+| Command | Short / Alias | Description | Example |
+| :--- | :--- | :--- | :--- |
+| `cuser doctor` | `cuser check` | Diagnose CLI installation, active symlinks, token expiry, and permissions | `cuser doctor` |
+| `cuser doctor --fix` | | Automatically repair broken symlinks, prune dead aliases & mappings, harden permissions | `cuser doctor --fix` |
+| `cuser prompt` | | Zero-latency status snippet for shell prompts (`<2ms`, Starship, Oh-My-Zsh, tmux) | `cuser prompt --full` |
+| `cuser completions <shell>` | | Generate autocompletions for `bash`, `zsh`, `fish`, or `powershell` | `eval "$(cuser completions zsh)"` |
 
 ### Headless Ingestion & Backup
 | Command | Description | Example |
@@ -177,10 +189,9 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 | `cuser purge` | | Permanently remove all claude-user profiles, aliases, and settings | `cuser purge` |
 | `cuser sync` | | Sync files from `shared/` directory into all profiles | `cuser sync` |
 
-### Shell Completions & System Commands
+### System Commands
 | Command | Short / Alias | Description |
 | :--- | :--- | :--- |
-| `cuser completions <shell>` | | Generate autocompletions for `bash`, `zsh`, `fish`, or `powershell` |
 | `cuser --update` | `cuser update` | Check and update to the latest release version |
 | `cuser --version` | `cuser -v` | Show installed version |
 | `cuser --help` | `cuser -h` | Show help message |

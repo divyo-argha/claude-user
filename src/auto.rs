@@ -21,6 +21,7 @@ pub struct AutoSwitchOptions {
     pub once: bool,
     pub dry_run: bool,
     pub json: bool,
+    pub notify: bool,
 }
 
 impl Default for AutoSwitchOptions {
@@ -33,6 +34,7 @@ impl Default for AutoSwitchOptions {
             once: false,
             dry_run: false,
             json: false,
+            notify: true,
         }
     }
 }
@@ -63,6 +65,7 @@ pub fn parse_options(args: &[String]) -> Result<AutoSwitchOptions> {
         once: false,
         dry_run: false,
         json: false,
+        notify: true,
     };
     let mut i = 0;
 
@@ -104,6 +107,14 @@ pub fn parse_options(args: &[String]) -> Result<AutoSwitchOptions> {
                 } else {
                     bail!("--interval requires seconds");
                 }
+            }
+            "--notify" => {
+                opts.notify = true;
+                i += 1;
+            }
+            "--no-notify" => {
+                opts.notify = false;
+                i += 1;
             }
             "--once" => {
                 opts.once = true;
@@ -148,6 +159,16 @@ pub fn parse_options(args: &[String]) -> Result<AutoSwitchOptions> {
 }
 
 pub fn run_auto(args: &[String]) -> Result<()> {
+    if args.iter().any(|a| a == "--install-service") {
+        return crate::service::install_service();
+    }
+    if args.iter().any(|a| a == "--uninstall-service") {
+        return crate::service::uninstall_service();
+    }
+    if args.iter().any(|a| a == "--service-status") {
+        return crate::service::service_status();
+    }
+
     let opts = parse_options(args)?;
 
     if opts.once {
@@ -339,6 +360,12 @@ pub fn tick(opts: &AutoSwitchOptions) -> Result<Outcome> {
                 "Auto-switch: Active profile \"{current_name}\" requires rotation ({reason}), but all other accounts are exhausted or disabled."
             );
         }
+        if opts.notify {
+            crate::notify::send_notification(
+                "Claude User: All Accounts Exhausted",
+                &format!("Active profile \"{current_name}\" reached limit ({reason}), no alternatives available"),
+            );
+        }
         return Ok(Outcome::Blocked);
     }
 
@@ -376,6 +403,12 @@ pub fn tick(opts: &AutoSwitchOptions) -> Result<Outcome> {
 
     if !opts.dry_run {
         profiles::activate_profile(&winner.name)?;
+        if opts.notify {
+            crate::notify::send_notification(
+                "Claude User Auto-Switch",
+                &format!("Switched from \"{current_name}\" to \"{}\" ({reason})", winner.name),
+            );
+        }
     }
 
     if opts.json {

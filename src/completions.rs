@@ -51,6 +51,9 @@ _cuser() {
         'remove:Delete a profile'
         'rename:Rename a profile'
         'purge:Remove all claude-user data'
+        'doctor:Diagnose setup, tokens, permissions and auto-repair'
+        'watch:Live auto-refreshing quota monitor dashboard'
+        'prompt:Zero-latency status for shell prompts'
         'completions:Generate shell autocompletions'
     )
 
@@ -113,7 +116,7 @@ const BASH_COMPLETIONS: &str = r#"_cuser() {
         cword=$COMP_CWORD
     }
 
-    local commands="switch run list usage auto alias unalias config add-token export import import-usage current status map unmap disable enable sync remove rename purge completions --help --version --update --json --refresh --token-status"
+    local commands="switch run list usage auto alias unalias config add-token export import import-usage current status map unmap disable enable sync remove rename purge doctor watch prompt completions --help --version --update --json --refresh --token-status --fix --short --full"
     
     local profiles=""
     local root="${CLAUDE_PROFILES_DIR:-$HOME/.claude-profiles}"
@@ -190,6 +193,9 @@ complete -c cuser -n "__fish_use_subcommand" -a sync -d "Sync shared config"
 complete -c cuser -n "__fish_use_subcommand" -a remove -d "Delete a profile"
 complete -c cuser -n "__fish_use_subcommand" -a rename -d "Rename a profile"
 complete -c cuser -n "__fish_use_subcommand" -a purge -d "Remove all claude-user data"
+complete -c cuser -n "__fish_use_subcommand" -a doctor -d "Diagnose and auto-repair setup"
+complete -c cuser -n "__fish_use_subcommand" -a watch -d "Live quota monitor dashboard"
+complete -c cuser -n "__fish_use_subcommand" -a prompt -d "Zero-latency status for shell prompts"
 complete -c cuser -n "__fish_use_subcommand" -a completions -d "Generate shell autocompletions"
 
 complete -c cuser -n "__fish_use_subcommand" -a "(__cuser_profiles)" -d "Profile"
@@ -227,6 +233,9 @@ const PWSH_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -CommandNam
         [Management.Automation.CompletionResult]::new('remove', 'remove', 'ParameterValue', 'Delete a profile'),
         [Management.Automation.CompletionResult]::new('rename', 'rename', 'ParameterValue', 'Rename a profile'),
         [Management.Automation.CompletionResult]::new('purge', 'purge', 'ParameterValue', 'Remove all claude-user data'),
+        [Management.Automation.CompletionResult]::new('doctor', 'doctor', 'ParameterValue', 'Diagnose and auto-repair setup'),
+        [Management.Automation.CompletionResult]::new('watch', 'watch', 'ParameterValue', 'Live quota monitor dashboard'),
+        [Management.Automation.CompletionResult]::new('prompt', 'prompt', 'ParameterValue', 'Zero-latency status for shell prompts'),
         [Management.Automation.CompletionResult]::new('completions', 'completions', 'ParameterValue', 'Generate shell autocompletions')
     )
 
