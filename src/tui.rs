@@ -1137,7 +1137,7 @@ fn draw(f: &mut Frame, state: &mut ListState, ctx: &DrawContext) {
     f.render_stateful_widget(list, main_chunks[0], state);
 
     // Right Column: LIVE QUOTA & RATE LIMITS
-    let bar_width = (main_chunks[1].width as usize).saturating_sub(26).clamp(8, 22);
+    let bar_width = (main_chunks[1].width as usize).saturating_sub(32).clamp(14, 32);
     let right_widget = match visible.get(state.selected().unwrap_or(0)) {
         Some((_, Item::Profile {
             name,
@@ -1151,43 +1151,33 @@ fn draw(f: &mut Frame, state: &mut ListState, ctx: &DrawContext) {
         })) => {
             let mut lines = Vec::new();
 
-            // Account info
-            let mut name_spans = vec![
-                Span::styled("Profile: ", Style::default().fg(muted_text)),
-                Span::styled(name.clone(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            // Profile Header Line matching the screenshot
+            let mut header_spans = vec![
+                Span::styled(format!("  {name}"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
             ];
             if let Some(a) = alias {
-                name_spans.push(Span::styled(format!("  (@{a})"), Style::default().fg(Color::Yellow)));
+                header_spans.push(Span::styled(format!("  [{a}]"), Style::default().fg(Color::Rgb(229, 192, 123))));
             }
             if *is_current {
-                name_spans.push(Span::styled("  ● Currently Active", Style::default().fg(active_color).add_modifier(Modifier::BOLD)));
+                header_spans.push(Span::styled("   ● active", Style::default().fg(Color::Rgb(217, 119, 87)).add_modifier(Modifier::BOLD)));
             }
-            lines.push(Line::from(name_spans));
-
-            let acc_str = match (email, org_name) {
-                (Some(e), Some(o)) => format!("{e}  •  {o}"),
-                (Some(e), None) => e.clone(),
-                (None, Some(o)) => o.clone(),
-                (None, None) => "No email/org metadata cached".to_string(),
-            };
-            lines.push(Line::from(vec![
-                Span::styled("Account: ", Style::default().fg(muted_text)),
-                Span::styled(acc_str, Style::default().fg(Color::Rgb(226, 232, 240))),
-            ]));
-
             if *is_mapped {
-                lines.push(Line::from(vec![
-                    Span::styled("Directory: ", Style::default().fg(muted_text)),
-                    Span::styled("Mapped to current working directory", Style::default().fg(Color::Cyan)),
-                ]));
+                header_spans.push(Span::styled("   ★ mapped", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
             }
             if *is_disabled {
-                lines.push(Line::from(vec![
-                    Span::styled("State: ", Style::default().fg(muted_text)),
-                    Span::styled("Disabled (excluded from rotation)", Style::default().fg(Color::DarkGray)),
-                ]));
+                header_spans.push(Span::styled("   (disabled)", Style::default().fg(Color::DarkGray)));
             }
+            lines.push(Line::from(header_spans));
 
+            let acc_str = match (email, org_name) {
+                (Some(e), Some(o)) => format!("  {e}  •  {o}"),
+                (Some(e), None) => format!("  {e}"),
+                (None, Some(o)) => format!("  {o}"),
+                (None, None) => "  No email/org metadata".to_string(),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(acc_str, Style::default().fg(Color::Rgb(148, 163, 184))),
+            ]));
             lines.push(Line::raw(""));
 
             match usage {
@@ -1195,65 +1185,57 @@ fn draw(f: &mut Frame, state: &mut ListState, ctx: &DrawContext) {
                     let has_limits = u.five_hour.is_some() || u.seven_day.is_some() || u.spend.is_some() || !u.models.is_empty();
 
                     if let Some(h5) = &u.five_hour {
-                        lines.push(Line::from(vec![
-                            Span::styled("5-Hour Session Limit: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        ]));
-                        let mut b_spans = vec![Span::raw("  ")];
-                        b_spans.extend(crate::usage::render_tui_progress_spans(h5.pct, bar_width));
+                        let mut b_spans = vec![
+                            Span::styled("  5h     ", Style::default().fg(Color::Rgb(203, 213, 225)).add_modifier(Modifier::BOLD)),
+                        ];
+                        b_spans.extend(crate::usage::render_sleek_progress_spans(h5.pct, bar_width));
                         if let Some(rst) = &h5.countdown {
-                            b_spans.push(Span::styled(format!("  (resets in {rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                            b_spans.push(Span::styled(format!("  resets {rst}"), Style::default().fg(Color::Rgb(156, 163, 175))));
                         }
                         lines.push(Line::from(b_spans));
                     }
 
                     if let Some(d7) = &u.seven_day {
-                        lines.push(Line::raw(""));
-                        lines.push(Line::from(vec![
-                            Span::styled("7-Day Rolling Limit: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        ]));
-                        let mut b_spans = vec![Span::raw("  ")];
-                        b_spans.extend(crate::usage::render_tui_progress_spans(d7.pct, bar_width));
+                        let mut b_spans = vec![
+                            Span::styled("  7d     ", Style::default().fg(Color::Rgb(203, 213, 225)).add_modifier(Modifier::BOLD)),
+                        ];
+                        b_spans.extend(crate::usage::render_sleek_progress_spans(d7.pct, bar_width));
                         if let Some(rst) = &d7.countdown {
-                            b_spans.push(Span::styled(format!("  (resets in {rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                            b_spans.push(Span::styled(format!("  resets {rst}"), Style::default().fg(Color::Rgb(156, 163, 175))));
                         }
                         lines.push(Line::from(b_spans));
 
-                        // Pace & Burn Rate Analysis
+                        // Pace & Burn Rate Analysis under 7d
                         let pace_opt = d7.pace.as_ref().cloned().or_else(|| crate::usage::calculate_pace(d7.pct, d7.resets_at.as_deref()));
                         if let Some(pace) = &pace_opt {
-                            let mut p_spans = vec![Span::raw("  ")];
+                            let mut p_spans = vec![Span::raw("         ")];
                             p_spans.extend(crate::usage::render_pace_tui_spans(pace));
                             lines.push(Line::from(p_spans));
                         }
                     }
 
-                    if let Some(sp) = &u.spend {
-                        lines.push(Line::raw(""));
-                        lines.push(Line::from(vec![
-                            Span::styled("Extra Spend: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        ]));
-                        let mut b_spans = vec![Span::raw("  ")];
-                        b_spans.extend(crate::usage::render_tui_progress_spans(sp.pct, bar_width));
-                        b_spans.push(Span::styled(
-                            format!("  (${:.2} used of ${:.2} limit)", sp.used, sp.limit),
-                            Style::default().fg(muted_text),
-                        ));
-                        lines.push(Line::from(b_spans));
+                    for m in &u.models {
+                        let label = format!("  {:<7}", m.name);
+                        let mut m_spans = vec![
+                            Span::styled(label, Style::default().fg(Color::Rgb(203, 213, 225)).add_modifier(Modifier::BOLD)),
+                        ];
+                        m_spans.extend(crate::usage::render_sleek_progress_spans(m.pct, bar_width));
+                        if let Some(rst) = &m.countdown {
+                            m_spans.push(Span::styled(format!("  resets {rst}"), Style::default().fg(Color::Rgb(156, 163, 175))));
+                        }
+                        lines.push(Line::from(m_spans));
                     }
 
-                    if !u.models.is_empty() {
-                        lines.push(Line::raw(""));
-                        lines.push(Line::from(vec![
-                            Span::styled("Per-Model Weekly Limits:", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                        ]));
-                        for m in &u.models {
-                            let mut m_spans = vec![Span::styled(format!("  {:<10} ", m.name), Style::default().fg(Color::Rgb(203, 213, 225)))];
-                            m_spans.extend(crate::usage::render_tui_progress_spans(m.pct, bar_width.saturating_sub(4).max(6)));
-                            if let Some(rst) = &m.countdown {
-                                m_spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
-                            }
-                            lines.push(Line::from(m_spans));
-                        }
+                    if let Some(sp) = &u.spend {
+                        let mut b_spans = vec![
+                            Span::styled("  Extra  ", Style::default().fg(Color::Rgb(203, 213, 225)).add_modifier(Modifier::BOLD)),
+                        ];
+                        b_spans.extend(crate::usage::render_sleek_progress_spans(sp.pct, bar_width));
+                        b_spans.push(Span::styled(
+                            format!("  ${:.2} of ${:.2}", sp.used, sp.limit),
+                            Style::default().fg(Color::Rgb(156, 163, 175)),
+                        ));
+                        lines.push(Line::from(b_spans));
                     }
 
                     // Status notes

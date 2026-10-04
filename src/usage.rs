@@ -215,6 +215,31 @@ pub fn render_tui_progress_spans(pct: f64, width: usize) -> Vec<Span<'static>> {
     ]
 }
 
+pub fn render_sleek_progress_spans(pct: f64, width: usize) -> Vec<Span<'static>> {
+    let clamped = pct.clamp(0.0, 100.0);
+    let filled = ((clamped / 100.0) * (width as f64)).round() as usize;
+    let empty = width.saturating_sub(filled);
+
+    // Exact palette from claude-swap aesthetic:
+    let color = if clamped >= 90.0 {
+        Color::Rgb(224, 108, 117) // Coral Red (#e06c75)
+    } else if clamped >= 70.0 {
+        Color::Rgb(229, 192, 123) // Soft Amber / Yellow (#e5c07b)
+    } else {
+        Color::Rgb(152, 195, 121) // Sage Green (#98c379)
+    };
+
+    let filled_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+    let track_style = Style::default().fg(Color::Rgb(71, 85, 105));
+    let text_style = Style::default().fg(color).add_modifier(Modifier::BOLD);
+
+    vec![
+        Span::styled("━".repeat(filled), filled_style),
+        Span::styled("─".repeat(empty), track_style),
+        Span::styled(format!("  {:>3.0}%", clamped), text_style),
+    ]
+}
+
 pub fn calculate_pace(pct: f64, resets_at: Option<&str>) -> Option<PaceAnalysis> {
     let resets_at = resets_at?;
     let dt = chrono::DateTime::parse_from_rfc3339(resets_at).ok()?;
@@ -775,6 +800,22 @@ mod tests {
         assert!(!cli_str.is_empty());
         let tui_spans = render_pace_tui_spans(&p);
         assert!(!tui_spans.is_empty());
+    }
+
+    #[test]
+    fn test_render_sleek_progress_spans() {
+        let spans_green = render_sleek_progress_spans(40.0, 10);
+        assert_eq!(spans_green.len(), 3);
+        assert_eq!(spans_green[0].content, "━━━━");
+        assert_eq!(spans_green[0].style.fg, Some(Color::Rgb(152, 195, 121)));
+        assert_eq!(spans_green[1].content, "──────");
+        assert_eq!(spans_green[2].content, "   40%");
+
+        let spans_amber = render_sleek_progress_spans(76.0, 10);
+        assert_eq!(spans_amber[0].style.fg, Some(Color::Rgb(229, 192, 123)));
+
+        let spans_red = render_sleek_progress_spans(96.0, 10);
+        assert_eq!(spans_red[0].style.fg, Some(Color::Rgb(224, 108, 117)));
     }
 }
 
