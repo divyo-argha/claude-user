@@ -5,10 +5,10 @@ use crossterm::terminal::{
 };
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
 use std::io::{stdout, Stdout};
 
@@ -19,12 +19,22 @@ use crate::profiles;
 type CuserTerminal = Terminal<CrosstermBackend<Stdout>>;
 
 const NEW_PROFILE: &str = "+ Add new account / profile (press 'n')";
+const ADD_TOKEN: &str = "+ Add via OAuth token or API key (press 't')";
 const IMPORT_DEFAULT: &str = "+ Import ~/.claude account (press 'i')";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Default,
+    QuotaAvailable,
+    SoonestReset,
+    Alphabetical,
+}
 
 pub enum PickResult {
     Existing(String),
     New(String),
     Import(String),
+    RunSession(String),
 }
 
 enum Action {
@@ -39,10 +49,23 @@ enum StatusMessage {
     Info(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenStep {
+    EnteringToken,
+    EnteringName,
+}
+
 enum Mode {
     Picking,
+    Search { query: String },
     Naming { action: Action, buffer: String },
+    AddToken {
+        step: TokenStep,
+        token_buf: String,
+        name_buf: String,
+    },
     ConfirmDelete { name: String },
+    Help,
 }
 
 enum Item {
@@ -58,6 +81,7 @@ enum Item {
     },
     ImportDefault,
     NewProfile,
+    AddToken,
 }
 
 pub fn run_picker() -> Result<Option<PickResult>> {
@@ -135,14 +159,148 @@ fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
         items.push(Item::ImportDefault);
     }
     items.push(Item::NewProfile);
+    items.push(Item::AddToken);
     Ok((items, current, current_idx))
 }
 
-fn selected_profile_name(items: &[Item], state: &ListState) -> Option<String> {
-    match items.get(state.selected().unwrap_or(0)) {
-        Some(Item::Profile { name, .. }) => Some(name.clone()),
+fn get_profile_max_pct(item: &Item) -> f64 {
+    match item {
+        Item::Profile { usage: Some(u), .. } => {
+            let p5 = u.five_hour.as_ref().map(|w| w.pct).unwrap_or(0.0);
+            let p7 = u.seven_day.as_ref().map(|w| w.pct).unwrap_or(0.0);
+            p5.max(p7)
+        }
+        _ => 999.0,
+    }
+}
+
+fn get_profile_earliest_reset(item: &Item) -> Option<String> {
+    match item {
+        Item::Profile { usage: Some(u), .. } => {
+            let r5 = u.five_hour.as_ref().and_then(|w| w.resets_at.clone());
+            let r7 = u.seven_day.as_ref().and_then(|w| w.resets_at.clone());
+            match (r5, r7) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(b),
+                (None, None) => None,
+            }
+        }
         _ => None,
     }
+}
+
+fn filter_and_sort_items<'a>(
+    items: &'a [Item],
+    query: &str,
+    sort_order: SortOrder,
+) -> Vec<(usize, &'a Item)> {
+    let q = query.trim().to_lowercase();
+    let mut list: Vec<(usize, &'a Item)> = items
+        .iter()
+        .enumerate()
+        .filter(|(_, it)| {
+            if q.is_empty() {
+                return true;
+            }
+            match it {
+                Item::Profile {
+                    name,
+                    alias,
+                    email,
+                    org_name,
+                    ..
+                } => {
+                    name.to_lowercase().contains(&q)
+                        || alias
+                            .as_ref()
+                            .map(|a| a.to_lowercase().contains(&q))
+                            .unwrap_or(false)
+                        || email
+                            .as_ref()
+                            .map(|e| e.to_lowercase().contains(&q))
+                            .unwrap_or(false)
+                        || org_name
+                            .as_ref()
+                            .map(|o| o.to_lowercase().contains(&q))
+                            .unwrap_or(false)
+                }
+                Item::ImportDefault => "import default account".contains(&q),
+                Item::NewProfile => "new add account profile".contains(&q),
+                Item::AddToken => "token api key sk-ant".contains(&q),
+            }
+        })
+        .collect();
+
+    list.sort_by(|(_, a), (_, b)| {
+        let a_is_action = matches!(a, Item::ImportDefault | Item::NewProfile | Item::AddToken);
+        let b_is_action = matches!(b, Item::ImportDefault | Item::NewProfile | Item::AddToken);
+        if a_is_action != b_is_action {
+            return a_is_action.cmp(&b_is_action);
+        }
+        if a_is_action {
+            return std::cmp::Ordering::Equal;
+        }
+
+        match sort_order {
+            SortOrder::Default => std::cmp::Ordering::Equal,
+            SortOrder::Alphabetical => {
+                let name_a = match a {
+                    Item::Profile { name, .. } => name.to_lowercase(),
+                    _ => String::new(),
+                };
+                let name_b = match b {
+                    Item::Profile { name, .. } => name.to_lowercase(),
+                    _ => String::new(),
+                };
+                name_a.cmp(&name_b)
+            }
+            SortOrder::QuotaAvailable => {
+                let pct_a = get_profile_max_pct(a);
+                let pct_b = get_profile_max_pct(b);
+                pct_a.partial_cmp(&pct_b).unwrap_or(std::cmp::Ordering::Equal)
+            }
+            SortOrder::SoonestReset => {
+                let reset_a = get_profile_earliest_reset(a);
+                let reset_b = get_profile_earliest_reset(b);
+                match (reset_a, reset_b) {
+                    (Some(a), Some(b)) => a.cmp(&b),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => std::cmp::Ordering::Equal,
+                }
+            }
+        }
+    });
+
+    list
+}
+
+fn selected_profile_name(visible: &[(usize, &Item)], state: &ListState) -> Option<String> {
+    match visible.get(state.selected().unwrap_or(0)) {
+        Some((_, Item::Profile { name, .. })) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn event_loop(
@@ -155,9 +313,33 @@ fn event_loop(
     list_state.select(Some(current_idx.unwrap_or(0)));
     let mut mode = Mode::Picking;
     let mut status: Option<StatusMessage> = None;
+    let mut search_query = String::new();
+    let mut sort_order = SortOrder::Default;
 
     loop {
-        terminal.draw(|f| draw(f, &items, &mut list_state, &mode, &status, &current_profile))?;
+        let visible = filter_and_sort_items(&items, &search_query, sort_order);
+        if let Some(sel) = list_state.selected() {
+            if visible.is_empty() {
+                list_state.select(None);
+            } else if sel >= visible.len() {
+                list_state.select(Some(visible.len().saturating_sub(1)));
+            }
+        } else if !visible.is_empty() {
+            list_state.select(Some(0));
+        }
+
+        terminal.draw(|f| {
+            let ctx = DrawContext {
+                visible: &visible,
+                total_items_count: items.len(),
+                mode: &mode,
+                status: &status,
+                current_profile: &current_profile,
+                search_query: &search_query,
+                sort_order,
+            };
+            draw(f, &mut list_state, &ctx);
+        })?;
 
         let Event::Key(key) = event::read()? else {
             continue;
@@ -170,8 +352,194 @@ fn event_loop(
         }
 
         match &mut mode {
+            Mode::Help => match key.code {
+                KeyCode::Esc
+                | KeyCode::Char('?')
+                | KeyCode::Char('h')
+                | KeyCode::Char('q')
+                | KeyCode::Enter => {
+                    mode = Mode::Picking;
+                    status = None;
+                }
+                _ => {}
+            },
+            Mode::Search { query } => match key.code {
+                KeyCode::Esc => {
+                    search_query.clear();
+                    mode = Mode::Picking;
+                    status = Some(StatusMessage::Info("Search cleared.".to_string()));
+                }
+                KeyCode::Enter => {
+                    mode = Mode::Picking;
+                    status = None;
+                }
+                KeyCode::Backspace => {
+                    query.pop();
+                    search_query = query.clone();
+                }
+                KeyCode::Char(c) => {
+                    query.push(c);
+                    search_query = query.clone();
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    let len = visible.len();
+                    if len > 0 {
+                        let i = list_state.selected().unwrap_or(0);
+                        if i == 0 {
+                            list_state.select(Some(len.saturating_sub(1)));
+                        } else {
+                            list_state.select(Some(i - 1));
+                        }
+                    }
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    let len = visible.len();
+                    if len > 0 {
+                        let i = list_state.selected().unwrap_or(0);
+                        if i + 1 < len {
+                            list_state.select(Some(i + 1));
+                        } else {
+                            list_state.select(Some(0));
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Mode::AddToken {
+                step,
+                token_buf,
+                name_buf,
+            } => match key.code {
+                KeyCode::Esc => {
+                    mode = Mode::Picking;
+                    status = None;
+                }
+                KeyCode::Backspace => match step {
+                    TokenStep::EnteringToken => {
+                        token_buf.pop();
+                    }
+                    TokenStep::EnteringName => {
+                        name_buf.pop();
+                    }
+                },
+                KeyCode::Char(c) => match step {
+                    TokenStep::EnteringToken => {
+                        token_buf.push(c);
+                    }
+                    TokenStep::EnteringName => {
+                        name_buf.push(c);
+                    }
+                },
+                KeyCode::Enter => match step {
+                    TokenStep::EnteringToken => {
+                        let token = token_buf.trim().to_string();
+                        let is_oauth = token.starts_with("sk-ant-oat01-")
+                            || token.starts_with("sk-ant-oat");
+                        let is_api_key = token.starts_with("sk-ant-api");
+                        if !is_oauth && !is_api_key {
+                            status = Some(StatusMessage::Error(
+                                "Invalid format: must start with 'sk-ant-oat...' (OAuth token) or 'sk-ant-api...' (API key)".to_string(),
+                            ));
+                        } else {
+                            let prefix = if is_oauth { "token" } else { "api" };
+                            let mut idx = 1;
+                            while profiles::profile_exists(&format!("{prefix}-{idx}"))
+                                .unwrap_or(false)
+                            {
+                                idx += 1;
+                            }
+                            *step = TokenStep::EnteringName;
+                            *name_buf = format!("{prefix}-{idx}");
+                            status = None;
+                        }
+                    }
+                    TokenStep::EnteringName => {
+                        let chosen_name = name_buf.trim().to_string();
+                        if chosen_name.is_empty() {
+                            status = Some(StatusMessage::Error(
+                                "Profile name cannot be empty".to_string(),
+                            ));
+                        } else if let Err(e) = profiles::validate_profile_name(&chosen_name) {
+                            status = Some(StatusMessage::Error(e.to_string()));
+                        } else if profiles::profile_exists(&chosen_name).unwrap_or(false) {
+                            status = Some(StatusMessage::Error(format!(
+                                "Profile \"{chosen_name}\" already exists"
+                            )));
+                        } else {
+                            match crate::token::add_token(token_buf, &chosen_name, None, None) {
+                                Ok(()) => {
+                                    let (new_items, new_current, _) = build_items()?;
+                                    items = new_items;
+                                    current_profile = new_current;
+                                    status = Some(StatusMessage::Info(format!(
+                                        "Registered profile \"{chosen_name}\" from token!"
+                                    )));
+                                    mode = Mode::Picking;
+                                }
+                                Err(e) => {
+                                    status = Some(StatusMessage::Error(format!(
+                                        "Failed to add token: {e}"
+                                    )));
+                                    mode = Mode::Picking;
+                                }
+                            }
+                        }
+                    }
+                },
+                _ => {}
+            },
             Mode::Picking => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
+                KeyCode::Char('q') => return Ok(None),
+                KeyCode::Esc => {
+                    if !search_query.is_empty() {
+                        search_query.clear();
+                        status = Some(StatusMessage::Info("Cleared filter.".to_string()));
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                KeyCode::Char('/') => {
+                    mode = Mode::Search {
+                        query: search_query.clone(),
+                    };
+                    status = None;
+                }
+                KeyCode::Char('?') | KeyCode::Char('h') => {
+                    mode = Mode::Help;
+                    status = None;
+                }
+                KeyCode::Char('o') | KeyCode::Char('O') => {
+                    sort_order = match sort_order {
+                        SortOrder::Default => SortOrder::QuotaAvailable,
+                        SortOrder::QuotaAvailable => SortOrder::SoonestReset,
+                        SortOrder::SoonestReset => SortOrder::Alphabetical,
+                        SortOrder::Alphabetical => SortOrder::Default,
+                    };
+                    let sort_name = match sort_order {
+                        SortOrder::Default => "Default",
+                        SortOrder::QuotaAvailable => "Quota: Most Available",
+                        SortOrder::SoonestReset => "Reset: Soonest First",
+                        SortOrder::Alphabetical => "Alphabetical (A-Z)",
+                    };
+                    status = Some(StatusMessage::Info(format!("Sorted by: {sort_name}")));
+                }
+                KeyCode::Char('t') | KeyCode::Char('T') => {
+                    mode = Mode::AddToken {
+                        step: TokenStep::EnteringToken,
+                        token_buf: String::new(),
+                        name_buf: String::new(),
+                    };
+                    status = None;
+                }
+                KeyCode::Char('x') | KeyCode::Char('X') => {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
+                        return Ok(Some(PickResult::RunSession(name)));
+                    } else {
+                        status = Some(StatusMessage::Info(
+                            "Select an existing profile to run in session mode.".to_string(),
+                        ));
+                    }
+                }
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('+') => {
                     mode = Mode::Naming {
                         action: Action::New,
@@ -193,37 +561,51 @@ fn event_loop(
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
-                    let i = list_state.selected().unwrap_or(0);
-                    if i == 0 {
-                        list_state.select(Some(items.len().saturating_sub(1)));
-                    } else {
-                        list_state.select(Some(i - 1));
+                    let len = visible.len();
+                    if len > 0 {
+                        let i = list_state.selected().unwrap_or(0);
+                        if i == 0 {
+                            list_state.select(Some(len.saturating_sub(1)));
+                        } else {
+                            list_state.select(Some(i - 1));
+                        }
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
-                    let i = list_state.selected().unwrap_or(0);
-                    if i + 1 < items.len() {
-                        list_state.select(Some(i + 1));
-                    } else {
-                        list_state.select(Some(0));
+                    let len = visible.len();
+                    if len > 0 {
+                        let i = list_state.selected().unwrap_or(0);
+                        if i + 1 < len {
+                            list_state.select(Some(i + 1));
+                        } else {
+                            list_state.select(Some(0));
+                        }
                     }
                 }
                 KeyCode::Home => {
-                    list_state.select(Some(0));
+                    if !visible.is_empty() {
+                        list_state.select(Some(0));
+                    }
                 }
                 KeyCode::End => {
-                    list_state.select(Some(items.len().saturating_sub(1)));
+                    let len = visible.len();
+                    if len > 0 {
+                        list_state.select(Some(len.saturating_sub(1)));
+                    }
                 }
                 KeyCode::PageUp => {
                     let i = list_state.selected().unwrap_or(0);
                     list_state.select(Some(i.saturating_sub(5)));
                 }
                 KeyCode::PageDown => {
-                    let i = list_state.selected().unwrap_or(0);
-                    list_state.select(Some((i + 5).min(items.len().saturating_sub(1))));
+                    let len = visible.len();
+                    if len > 0 {
+                        let i = list_state.selected().unwrap_or(0);
+                        list_state.select(Some((i + 5).min(len.saturating_sub(1))));
+                    }
                 }
                 KeyCode::Char('s') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
                         match profiles::activate_profile(&name) {
                             Ok(()) => {
                                 current_profile = Some(name.clone());
@@ -240,7 +622,7 @@ fn event_loop(
                     }
                 }
                 KeyCode::Char('a') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
                         let existing = aliases::aliases_for_profile(&name).unwrap_or_default();
                         let initial = existing.first().cloned().unwrap_or_default();
                         mode = Mode::Naming {
@@ -251,7 +633,7 @@ fn event_loop(
                     }
                 }
                 KeyCode::Char('m') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state)
+                    if let Some(name) = selected_profile_name(&visible, &list_state)
                         && let Ok(cwd) = std::env::current_dir()
                     {
                         let is_mapped_to_selected = mappings::resolve_mapping(&cwd)
@@ -294,7 +676,7 @@ fn event_loop(
                     }
                 }
                 KeyCode::Char('u') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
                         match crate::usage::get_profile_usage(&name, true) {
                             Ok(_) => {
                                 let sel = list_state.selected();
@@ -312,13 +694,13 @@ fn event_loop(
                     }
                 }
                 KeyCode::Char('d') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
                         mode = Mode::ConfirmDelete { name };
                         status = None;
                     }
                 }
                 KeyCode::Char('r') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
                         mode = Mode::Naming {
                             action: Action::Rename { old: name.clone() },
                             buffer: name,
@@ -327,7 +709,7 @@ fn event_loop(
                     }
                 }
                 KeyCode::Char('e') => {
-                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                    if let Some(name) = selected_profile_name(&visible, &list_state) {
                         let is_disabled = profiles::is_profile_disabled(&name).unwrap_or(false);
                         match profiles::set_profile_disabled(&name, !is_disabled) {
                             Ok(()) => {
@@ -346,17 +728,33 @@ fn event_loop(
                     }
                 }
                 KeyCode::Enter => {
-                    let selected = &items[list_state.selected().unwrap_or(0)];
-                    match selected {
-                        Item::NewProfile => {
-                            mode = Mode::Naming { action: Action::New, buffer: String::new() }
+                    if let Some((_, selected)) = visible.get(list_state.selected().unwrap_or(0)) {
+                        match selected {
+                            Item::NewProfile => {
+                                mode = Mode::Naming {
+                                    action: Action::New,
+                                    buffer: String::new(),
+                                };
+                            }
+                            Item::AddToken => {
+                                mode = Mode::AddToken {
+                                    step: TokenStep::EnteringToken,
+                                    token_buf: String::new(),
+                                    name_buf: String::new(),
+                                };
+                            }
+                            Item::ImportDefault => {
+                                mode = Mode::Naming {
+                                    action: Action::Import,
+                                    buffer: String::new(),
+                                };
+                            }
+                            Item::Profile { name, .. } => {
+                                return Ok(Some(PickResult::Existing(name.clone())));
+                            }
                         }
-                        Item::ImportDefault => {
-                            mode = Mode::Naming { action: Action::Import, buffer: String::new() }
-                        }
-                        Item::Profile { name, .. } => return Ok(Some(PickResult::Existing(name.clone()))),
+                        status = None;
                     }
-                    status = None;
                 }
                 _ => {}
             },
@@ -397,7 +795,9 @@ fn event_loop(
                         Action::Rename { old } => {
                             let old = old.clone();
                             if text.is_empty() {
-                                status = Some(StatusMessage::Error("profile name cannot be empty".to_string()));
+                                status = Some(StatusMessage::Error(
+                                    "profile name cannot be empty".to_string(),
+                                ));
                             } else if text == old {
                                 mode = Mode::Picking;
                                 status = None;
@@ -417,18 +817,14 @@ fn event_loop(
                                 }
                             }
                         }
-                        Action::New => {
-                            match profiles::validate_profile_name(&text) {
-                                Ok(()) => return Ok(Some(PickResult::New(text))),
-                                Err(e) => status = Some(StatusMessage::Error(e.to_string())),
-                            }
-                        }
-                        Action::Import => {
-                            match profiles::validate_profile_name(&text) {
-                                Ok(()) => return Ok(Some(PickResult::Import(text))),
-                                Err(e) => status = Some(StatusMessage::Error(e.to_string())),
-                            }
-                        }
+                        Action::New => match profiles::validate_profile_name(&text) {
+                            Ok(()) => return Ok(Some(PickResult::New(text))),
+                            Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                        },
+                        Action::Import => match profiles::validate_profile_name(&text) {
+                            Ok(()) => return Ok(Some(PickResult::Import(text))),
+                            Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                        },
                     }
                 }
                 KeyCode::Backspace => {
@@ -451,7 +847,9 @@ fn event_loop(
                                 .min(items.len().saturating_sub(1));
                             list_state.select(Some(idx));
                             mode = Mode::Picking;
-                            status = Some(StatusMessage::Info(format!("Deleted profile \"{name}\".")));
+                            status = Some(StatusMessage::Info(format!(
+                                "Deleted profile \"{name}\"."
+                            )));
                         }
                         Err(e) => {
                             mode = Mode::Picking;
@@ -468,33 +866,50 @@ fn event_loop(
     }
 }
 
-fn draw(
-    f: &mut Frame,
-    items: &[Item],
-    state: &mut ListState,
-    mode: &Mode,
-    status: &Option<StatusMessage>,
-    current_profile: &Option<String>,
-) {
-    let accent_color = Color::Rgb(217, 119, 87);
-    let border_color = Color::Rgb(71, 85, 105);
-    let active_color = Color::Rgb(74, 222, 128);
-    let muted_text = Color::Rgb(148, 163, 184);
+struct DrawContext<'a> {
+    visible: &'a [(usize, &'a Item)],
+    total_items_count: usize,
+    mode: &'a Mode,
+    status: &'a Option<StatusMessage>,
+    current_profile: &'a Option<String>,
+    search_query: &'a str,
+    sort_order: SortOrder,
+}
 
+fn draw(f: &mut Frame, state: &mut ListState, ctx: &DrawContext) {
+    let DrawContext {
+        visible,
+        total_items_count,
+        mode,
+        status,
+        current_profile,
+        search_query,
+        sort_order,
+    } = *ctx;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Top Header line
-            Constraint::Min(8),    // Main Two-Pane Area
-            Constraint::Length(4), // Bottom Status & Keybindings
+            Constraint::Length(1), // Top Header Status Line
+            Constraint::Min(8),    // Side-by-Side Master-Detail Body
+            Constraint::Length(4), // Bottom Status & Keybindings Panel
         ])
         .split(f.area());
 
-    // 1. Top Header Line (clean, minimalist, informative)
+    let border_color = Color::Rgb(71, 85, 105);
+    let accent_color = Color::Rgb(168, 85, 247); // Purple
+    let active_color = Color::Rgb(74, 222, 128); // Green
+    let muted_text = Color::Rgb(148, 163, 184);
+
+    // 1. Top Header Bar
     let header_line = Line::from(vec![
-        Span::styled(" ✦ CLAUDE-USER ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("v{}", env!("CARGO_PKG_VERSION")), Style::default().fg(muted_text)),
-        Span::styled("  ─  Multi-Account & Quota Manager", Style::default().fg(Color::Rgb(100, 116, 139))),
+        Span::styled(
+            "✦ CLAUDE-USER v0.3.0",
+            Style::default().fg(accent_color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  ─  Multi-Account & Quota Manager",
+            Style::default().fg(Color::Rgb(203, 213, 225)),
+        ),
         match current_profile {
             Some(curr) => Span::styled(
                 format!("    (active: {curr})"),
@@ -502,10 +917,14 @@ fn draw(
             ),
             None => Span::raw(""),
         },
+        Span::styled(
+            "   [Press ? for Help]",
+            Style::default().fg(Color::Yellow),
+        ),
     ]);
     f.render_widget(Paragraph::new(header_line), chunks[0]);
 
-    // 2. Responsive Main Area Layout (Two side-by-side columns if width >= 80, stacked if narrow)
+    // 2. Responsive Main Area Layout
     let is_wide = f.area().width >= 80;
     let main_chunks = if is_wide {
         Layout::default()
@@ -525,12 +944,12 @@ fn draw(
             .split(chunks[1])
     };
 
-    // Left Column: ACCOUNTS list
-    let list_items: Vec<ListItem> = items
+    // Left Column: PROFILES list
+    let list_items: Vec<ListItem> = visible
         .iter()
         .enumerate()
-        .map(|(idx, item)| {
-            let is_selected = state.selected() == Some(idx);
+        .map(|(v_idx, (_, item))| {
+            let is_selected = state.selected() == Some(v_idx);
             let prefix = if is_selected { " ▶ " } else { "   " };
 
             match item {
@@ -581,7 +1000,6 @@ fn draw(
                         ));
                     }
 
-                    // Mini badge in row
                     if let Some(u) = usage {
                         match u.status {
                             crate::usage::UsageStatus::Ok => {
@@ -604,6 +1022,17 @@ fn draw(
                     }
 
                     ListItem::new(Line::from(spans))
+                }
+                Item::AddToken => {
+                    let style = if is_selected {
+                        Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::Rgb(125, 211, 252))
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(56, 189, 248))),
+                        Span::styled(ADD_TOKEN, style),
+                    ]))
                 }
                 Item::ImportDefault => {
                     let style = if is_selected {
@@ -631,15 +1060,29 @@ fn draw(
         })
         .collect();
 
-    let profiles_title = match current_profile {
-        Some(curr) => format!(" PROFILES (active: {curr}) "),
-        None => " PROFILES ".to_string(),
+    let filter_badge = if !search_query.is_empty() {
+        format!(" [Filter: \"{search_query}\" ({}/{})] ", visible.len(), total_items_count)
+    } else {
+        String::new()
+    };
+    let sort_badge = match sort_order {
+        SortOrder::Default => "",
+        SortOrder::QuotaAvailable => " [Sort: Quota (o)]",
+        SortOrder::SoonestReset => " [Sort: Soonest (o)]",
+        SortOrder::Alphabetical => " [Sort: A-Z (o)]",
+    };
+    let profiles_title = format!(" PROFILES{filter_badge}{sort_badge} ");
+
+    let list_border = if matches!(mode, Mode::Search { .. }) {
+        Color::Rgb(250, 204, 21)
+    } else {
+        border_color
     };
 
     let list = List::new(list_items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color))
+            .border_style(Style::default().fg(list_border))
             .title(Span::styled(
                 profiles_title,
                 Style::default().fg(accent_color).add_modifier(Modifier::BOLD),
@@ -649,8 +1092,8 @@ fn draw(
 
     // Right Column: LIVE QUOTA & RATE LIMITS
     let bar_width = (main_chunks[1].width as usize).saturating_sub(26).clamp(8, 22);
-    let right_widget = match items.get(state.selected().unwrap_or(0)) {
-        Some(Item::Profile {
+    let right_widget = match visible.get(state.selected().unwrap_or(0)) {
+        Some((_, Item::Profile {
             name,
             alias,
             email,
@@ -659,7 +1102,7 @@ fn draw(
             is_disabled,
             is_mapped,
             usage,
-        }) => {
+        })) => {
             let mut lines = Vec::new();
 
             // Account info
@@ -701,18 +1144,13 @@ fn draw(
 
             lines.push(Line::raw(""));
 
-            // Quota & Rate Limits
-            lines.push(Line::from(vec![
-                Span::styled("QUOTA & RATE LIMITS", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-            ]));
-
-            match usage.as_deref() {
+            match usage {
                 Some(u) => {
                     let has_limits = u.five_hour.is_some() || u.seven_day.is_some() || u.spend.is_some() || !u.models.is_empty();
+
                     if let Some(h5) = &u.five_hour {
-                        lines.push(Line::raw(""));
                         lines.push(Line::from(vec![
-                            Span::styled("5-Hour Limit: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                            Span::styled("5-Hour Session Limit: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                         ]));
                         let mut b_spans = vec![Span::raw("  ")];
                         b_spans.extend(crate::usage::render_tui_progress_spans(h5.pct, bar_width));
@@ -725,7 +1163,7 @@ fn draw(
                     if let Some(d7) = &u.seven_day {
                         lines.push(Line::raw(""));
                         lines.push(Line::from(vec![
-                            Span::styled("7-Day Limit: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                            Span::styled("7-Day Rolling Limit: ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
                         ]));
                         let mut b_spans = vec![Span::raw("  ")];
                         b_spans.extend(crate::usage::render_tui_progress_spans(d7.pct, bar_width));
@@ -733,6 +1171,14 @@ fn draw(
                             b_spans.push(Span::styled(format!("  (resets in {rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
                         }
                         lines.push(Line::from(b_spans));
+
+                        // Pace & Burn Rate Analysis
+                        let pace_opt = d7.pace.as_ref().cloned().or_else(|| crate::usage::calculate_pace(d7.pct, d7.resets_at.as_deref()));
+                        if let Some(pace) = &pace_opt {
+                            let mut p_spans = vec![Span::raw("  ")];
+                            p_spans.extend(crate::usage::render_pace_tui_spans(pace));
+                            lines.push(Line::from(p_spans));
+                        }
                     }
 
                     if let Some(sp) = &u.spend {
@@ -827,7 +1273,7 @@ fn draw(
                     .title(Span::styled(" QUOTA & RATE LIMITS ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)))
             )
         }
-        Some(Item::NewProfile) => {
+        Some((_, Item::NewProfile)) => {
             let lines = vec![
                 Line::from(vec![
                     Span::styled("ADD NEW ACCOUNT", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)),
@@ -858,10 +1304,56 @@ fn draw(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Rgb(74, 222, 128)))
-                    .title(Span::styled(" ADD ACCOUNT ", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)))
+                    .title(Span::styled(" CREATE PROFILE ", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)))
             )
         }
-        Some(Item::ImportDefault) => {
+        Some((_, Item::AddToken)) => {
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled("DIRECT TOKEN / API KEY IMPORT", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::raw("Press "),
+                    Span::styled("Enter", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::raw(" (or press "),
+                    Span::styled("t", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                    Span::raw(") to register an OAuth Setup Token or API Key."),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("Supported Token Formats:", Style::default().fg(muted_text).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::styled("  • sk-ant-oat01-... ", Style::default().fg(Color::White)),
+                    Span::styled("(OAuth setup-token with quota)", Style::default().fg(muted_text)),
+                ]),
+                Line::from(vec![
+                    Span::styled("  • sk-ant-api03-... ", Style::default().fg(Color::White)),
+                    Span::styled("(Anthropic API key for pay-per-token)", Style::default().fg(muted_text)),
+                ]),
+                Line::raw(""),
+                Line::from(vec![
+                    Span::styled("Why use this:", Style::default().fg(muted_text).add_modifier(Modifier::BOLD)),
+                ]),
+                Line::from(vec![
+                    Span::raw("  • Headless servers / remote SSH without browser access"),
+                ]),
+                Line::from(vec![
+                    Span::raw("  • Automated CI/CD or team provisioning"),
+                ]),
+                Line::from(vec![
+                    Span::raw("  • Direct pasting without leaving the interactive TUI"),
+                ]),
+            ];
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Rgb(56, 189, 248)))
+                    .title(Span::styled(" REGISTER TOKEN / KEY ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)))
+            )
+        }
+        Some((_, Item::ImportDefault)) => {
             let lines = vec![
                 Line::from(vec![
                     Span::styled("IMPORT EXISTING ACCOUNT", Style::default().fg(Color::Rgb(250, 204, 21)).add_modifier(Modifier::BOLD)),
@@ -893,7 +1385,7 @@ fn draw(
             )
         }
         None => {
-            Paragraph::new(vec![Line::raw("No profile selected.")])
+            Paragraph::new(vec![Line::raw("No profiles matching search.")])
                 .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(border_color)))
         }
     };
@@ -901,31 +1393,50 @@ fn draw(
 
     // 3. Bottom Status & Keybindings Area
     let status_line = match mode {
-        Mode::Picking => {
-            match status {
-                Some(StatusMessage::Error(e)) => Line::from(vec![
-                    Span::styled("✖ Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                    Span::styled(e.clone(), Style::default().fg(Color::Red)),
-                ]),
-                Some(StatusMessage::Info(msg)) => Line::from(vec![
-                    Span::styled("✔ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::styled(msg.clone(), Style::default().fg(Color::Green)),
-                ]),
-                None => Line::from(vec![
-                    Span::styled("Tip: ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-                    Span::styled("Use ↑/↓ to browse live quota. Press ", Style::default().fg(muted_text)),
-                    Span::styled("Enter", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(" to launch. Press ", Style::default().fg(muted_text)),
-                    Span::styled("u", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(" to refresh quota.", Style::default().fg(muted_text)),
-                ]),
-            }
-        }
+        Mode::Picking => match status {
+            Some(StatusMessage::Error(e)) => Line::from(vec![
+                Span::styled("✖ Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(e.clone(), Style::default().fg(Color::Red)),
+            ]),
+            Some(StatusMessage::Info(msg)) => Line::from(vec![
+                Span::styled("✔ ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(msg.clone(), Style::default().fg(Color::Green)),
+            ]),
+            None => Line::from(vec![
+                Span::styled("Tip: ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
+                Span::styled("Press ", Style::default().fg(muted_text)),
+                Span::styled("[/]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" to filter, ", Style::default().fg(muted_text)),
+                Span::styled("[o]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" to sort, ", Style::default().fg(muted_text)),
+                Span::styled("[x]", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                Span::styled(" for parallel session, ", Style::default().fg(muted_text)),
+                Span::styled("[?]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" for all shortcuts.", Style::default().fg(muted_text)),
+            ]),
+        },
+        Mode::Search { query } => Line::from(vec![
+            Span::styled("Search / Filter: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{query}_"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("   (Type to filter, ↑/↓ to navigate, Enter to lock, Esc to clear)", Style::default().fg(muted_text)),
+        ]),
+        Mode::AddToken { step, token_buf, name_buf } => match step {
+            TokenStep::EnteringToken => Line::from(vec![
+                Span::styled("Paste Token / Key: ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{token_buf}_"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("   (sk-ant-oat... or sk-ant-api..., Enter to proceed, Esc to cancel)", Style::default().fg(muted_text)),
+            ]),
+            TokenStep::EnteringName => Line::from(vec![
+                Span::styled("Profile name: ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("{name_buf}_"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("   (Enter to register profile, Esc to cancel)", Style::default().fg(muted_text)),
+            ]),
+        },
         Mode::Naming { action, buffer } => {
             let label = match action {
-                Action::New => "New Account / Profile Name",
-                Action::Import => "Profile Name for Imported Account",
-                Action::Rename { .. } => "New Name",
+                Action::New => "Name for new profile",
+                Action::Import => "Name for imported profile",
+                Action::Rename { .. } => "New name for profile",
                 Action::Alias { .. } => "Alias (blank to unset)",
             };
             match status {
@@ -941,32 +1452,34 @@ fn draw(
                 ]),
             }
         }
-        Mode::ConfirmDelete { name } => {
-            Line::from(vec![
-                Span::styled(format!("Delete profile \"{name}\"? This removes its stored login. [y/N]"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            ])
-        }
+        Mode::ConfirmDelete { name } => Line::from(vec![
+            Span::styled(format!("Delete profile \"{name}\"? This removes its stored login. [y/N]"), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Mode::Help => Line::from(vec![
+            Span::styled("Command Palette active: ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled("Press Esc or ? to return to picker.", Style::default().fg(Color::White)),
+        ]),
     };
 
     let keybindings_line = Line::from(vec![
         Span::styled(" [↑/↓] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Navigate   "),
+        Span::raw("Move  "),
         Span::styled(" [Enter] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Launch   "),
+        Span::raw("Launch  "),
+        Span::styled(" [x] ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+        Span::raw("Session  "),
         Span::styled(" [s] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Switch   "),
-        Span::styled(" [a] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Alias   "),
-        Span::styled(" [m] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Map CWD   "),
-        Span::styled(" [e] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Disable   "),
-        Span::styled(" [r] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Rename   "),
-        Span::styled(" [d] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Delete   "),
+        Span::raw("Switch  "),
+        Span::styled(" [/] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("Filter  "),
+        Span::styled(" [o] ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw("Sort  "),
+        Span::styled(" [t] ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+        Span::raw("Token  "),
         Span::styled(" [u] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
-        Span::raw("Refresh   "),
+        Span::raw("Refresh  "),
+        Span::styled(" [?] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::raw("Help  "),
         Span::styled(" [q] ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
         Span::raw("Quit"),
     ]);
@@ -978,4 +1491,108 @@ fn draw(
             .title(Span::styled(" STATUS & ACTIONS ", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)))
     );
     f.render_widget(footer, chunks[2]);
+
+    // 4. Floating Command Palette / Help Modal Overlay
+    if matches!(mode, Mode::Help) {
+        let help_area = centered_rect(76, 76, f.area());
+        f.render_widget(Clear, help_area);
+
+        let help_text = vec![
+            Line::from(vec![
+                Span::styled("✦ CLAUDE-USER COMMAND PALETTE & SHORTCUTS ✦", Style::default().fg(accent_color).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("NAVIGATION & SELECTION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("  ↑ / ↓ / j / k       ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Navigate through accounts and actions", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  Home / End          ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Jump to top or bottom of profile list", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  PgUp / PgDn         ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Scroll profiles 5 items at a time", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("LAUNCH & EXECUTION", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("  Enter               ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled("Launch Claude Code with selected profile (updates default)", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  x                   ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                Span::styled("Run isolated parallel session (leaves default symlink unchanged!)", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  s                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Switch global default active profile without launching", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  u                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Fetch fresh live quota from Anthropic OAuth endpoint", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("SEARCH & SMART SORTING", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("  /                   ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("Instant filter/search (matches name, alias, email, org)", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  o                   ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled("Cycle sort: Most Quota Available → Soonest Reset → A-Z → Default", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("PROFILE MANAGEMENT", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("  n                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Create new profile & sign in via browser OAuth", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  t                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Direct paste OAuth setup-token or API key (modal)", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  i                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Import existing ~/.claude login into managed profile", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  a                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Assign short alias (e.g. 'dev', 'work')", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  m                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Map / unmap current working directory (CWD) to profile", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  e                   ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Toggle enable / disable (held out of auto-rotation)", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  r / d               ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Rename profile  /  Delete profile login", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+            Line::from(vec![
+                Span::styled("  ? / Esc             ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled("Close this help dialog", Style::default().fg(Color::Rgb(203, 213, 225))),
+            ]),
+        ];
+
+        let help_widget = Paragraph::new(help_text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Rgb(250, 204, 21)))
+                .title(Span::styled(" COMMAND PALETTE (Esc or ? to close) ", Style::default().fg(Color::Rgb(250, 204, 21)).add_modifier(Modifier::BOLD)))
+        );
+        f.render_widget(help_widget, help_area);
+    }
 }

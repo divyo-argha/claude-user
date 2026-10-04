@@ -228,6 +228,10 @@ fn run_picker() -> Result<()> {
             println!("Imported ~/.claude as profile \"{name}\".");
             launch_profile(&name, &[])
         }
+        Some(tui::PickResult::RunSession(name)) => {
+            eprintln!("Running Claude Code as \"{name}\" in isolated session mode...");
+            launch_session_profile(&name, &[])
+        }
         None => Ok(()),
     }
 }
@@ -349,6 +353,10 @@ fn cmd_usage(args: &[String], is_json: bool, force_refresh: bool) -> Result<()> 
                 let bar = usage::render_colored_progress_bar(d7.pct, 20);
                 let rst = usage::format_countdown_cli(d7.countdown.as_deref());
                 println!("  7-Day Limit:   {bar}{rst}");
+                if let Some(pace) = &d7.pace {
+                    let pace_str = usage::format_pace_cli(pace);
+                    println!("  Pace & Burn:   {pace_str}");
+                }
             }
             if let Some(sp) = &u.spend {
                 let bar = usage::render_colored_progress_bar(sp.pct, 20);
@@ -547,6 +555,10 @@ fn cmd_list(is_json: bool, force_refresh: bool, token_status: bool) -> Result<()
                             let bar = usage::render_colored_progress_bar(d7.pct, 16);
                             let rst = usage::format_countdown_cli(d7.countdown.as_deref());
                             println!("    7d quota:  {bar}{rst}");
+                            if let Some(pace) = &d7.pace {
+                                let pace_str = usage::format_pace_cli(pace);
+                                println!("    pace:      {pace_str}");
+                            }
                         }
                     }
                     usage::UsageStatus::TokenExpired => {

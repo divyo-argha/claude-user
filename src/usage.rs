@@ -13,11 +13,24 @@ use ratatui::text::Span;
 const USAGE_API_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CACHE_TTL_SECS: i64 = 300; // 5 minutes
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PaceAnalysis {
+    pub expected_pct: f64,
+    pub pace_delta: f64,
+    pub is_ahead: bool,
+    pub is_under: bool,
+    pub burn_rate_per_hour: f64,
+    pub projected_hours_to_exhaustion: Option<f64>,
+    pub will_last_to_reset: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowUsage {
     pub pct: f64,
     pub resets_at: Option<String>,
     pub countdown: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace: Option<PaceAnalysis>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,6 +213,120 @@ pub fn render_tui_progress_spans(pct: f64, width: usize) -> Vec<Span<'static>> {
         Span::styled("] ", bracket_style),
         Span::styled(format!("{:>3.0}%", clamped), text_style),
     ]
+}
+
+pub fn calculate_pace(pct: f64, resets_at: Option<&str>) -> Option<PaceAnalysis> {
+    let resets_at = resets_at?;
+    let dt = chrono::DateTime::parse_from_rfc3339(resets_at).ok()?;
+    let now = Utc::now();
+    let diff = dt.signed_duration_since(now);
+    let rem_secs = diff.num_seconds();
+    if rem_secs <= 0 {
+        return None;
+    }
+
+    let rem_hours = (rem_secs as f64) / 3600.0;
+    let total_window_hours = 168.0; // 7 days = 168 hours
+    let clamped_rem_hours = rem_hours.min(total_window_hours);
+    let elapsed_hours = (total_window_hours - clamped_rem_hours).max(0.5);
+
+    let expected_pct = (elapsed_hours / total_window_hours) * 100.0;
+    let pace_delta = pct - expected_pct;
+
+    // Only flag ahead/under if at least 4 hours elapsed in window to avoid false positives
+    let is_ahead = pace_delta > 10.0 && elapsed_hours >= 4.0;
+    let is_under = pace_delta < -15.0 && elapsed_hours >= 4.0;
+
+    let burn_rate_per_hour = (pct / elapsed_hours).max(0.0);
+    let remaining_pct = (100.0 - pct).max(0.0);
+
+    let (projected_hours_to_exhaustion, will_last_to_reset) = if burn_rate_per_hour > 0.001 {
+        let hrs = remaining_pct / burn_rate_per_hour;
+        let will_last = hrs >= clamped_rem_hours;
+        (Some(hrs), will_last)
+    } else {
+        (None, true)
+    };
+
+    Some(PaceAnalysis {
+        expected_pct,
+        pace_delta,
+        is_ahead,
+        is_under,
+        burn_rate_per_hour,
+        projected_hours_to_exhaustion,
+        will_last_to_reset,
+    })
+}
+
+pub fn format_pace_cli(pace: &PaceAnalysis) -> String {
+    let badge = if pace.is_ahead {
+        if is_no_color() {
+            format!("🔥 Ahead of pace (+{:.0}%)", pace.pace_delta)
+        } else {
+            format!("\x1b[38;2;248;113;113m🔥 Ahead of pace (+{:.0}%)\x1b[0m", pace.pace_delta)
+        }
+    } else if pace.is_under {
+        if is_no_color() {
+            format!("✨ Under pace ({:.0}%)", pace.pace_delta)
+        } else {
+            format!("\x1b[38;2;56;189;248m✨ Under pace ({:.0}%)\x1b[0m", pace.pace_delta)
+        }
+    } else {
+        if is_no_color() {
+            format!("🌱 On track (exp ~{:.0}%)", pace.expected_pct)
+        } else {
+            format!("\x1b[38;2;74;222;128m🌱 On track (exp ~{:.0}%)\x1b[0m", pace.expected_pct)
+        }
+    };
+
+    let burn = if is_no_color() {
+        format!("Burn: {:.1}%/h", pace.burn_rate_per_hour)
+    } else {
+        format!("\x1b[38;2;148;163;184mBurn: {:.1}%/h\x1b[0m", pace.burn_rate_per_hour)
+    };
+
+    let proj = if !pace.will_last_to_reset && let Some(hrs) = pace.projected_hours_to_exhaustion {
+        if is_no_color() {
+            format!("⚠️ May exhaust in ~{:.0}h", hrs)
+        } else {
+            format!("\x1b[38;2;250;204;21m⚠️ May exhaust in ~{:.0}h\x1b[0m", hrs)
+        }
+    } else {
+        if is_no_color() {
+            "✔ Lasts to reset".to_string()
+        } else {
+            "\x1b[38;2;74;222;128m✔ Lasts to reset\x1b[0m".to_string()
+        }
+    };
+
+    format!("{badge} • {burn} • {proj}")
+}
+
+pub fn render_pace_tui_spans(pace: &PaceAnalysis) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    if pace.is_ahead {
+        spans.push(Span::styled("🔥 Ahead of pace ", Style::default().fg(Color::Rgb(248, 113, 113)).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(format!("(+{:.0}%) ", pace.pace_delta), Style::default().fg(Color::Rgb(248, 113, 113))));
+    } else if pace.is_under {
+        spans.push(Span::styled("✨ Under pace ", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(format!("({:.0}%) ", pace.pace_delta), Style::default().fg(Color::Rgb(56, 189, 248))));
+    } else {
+        spans.push(Span::styled("🌱 On track ", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(format!("(exp ~{:.0}%) ", pace.expected_pct), Style::default().fg(Color::Rgb(148, 163, 184))));
+    }
+
+    spans.push(Span::styled("• ", Style::default().fg(Color::Rgb(100, 116, 139))));
+    spans.push(Span::styled(format!("{:.1}%/h burn ", pace.burn_rate_per_hour), Style::default().fg(Color::Rgb(148, 163, 184))));
+    spans.push(Span::styled("• ", Style::default().fg(Color::Rgb(100, 116, 139))));
+
+    if !pace.will_last_to_reset && let Some(hrs) = pace.projected_hours_to_exhaustion {
+        spans.push(Span::styled(format!("⚠️ May exhaust in ~{:.0}h", hrs), Style::default().fg(Color::Rgb(250, 204, 21)).add_modifier(Modifier::BOLD)));
+    } else {
+        spans.push(Span::styled("✔ Lasts to reset", Style::default().fg(Color::Rgb(74, 222, 128))));
+    }
+
+    spans
 }
 
 pub fn get_profile_usage(profile: &str, force_refresh: bool) -> Result<AccountUsage> {
@@ -401,6 +528,7 @@ fn parse_usage_response(profile: &str, data: &serde_json::Value) -> AccountUsage
             pct,
             resets_at,
             countdown,
+            pace: None,
         })
     });
 
@@ -408,10 +536,12 @@ fn parse_usage_response(profile: &str, data: &serde_json::Value) -> AccountUsage
         let pct = d7.get("utilization")?.as_f64()?;
         let resets_at = d7.get("resets_at").and_then(|r| r.as_str()).map(String::from);
         let countdown = resets_at.as_deref().and_then(format_reset_countdown);
+        let pace = calculate_pace(pct, resets_at.as_deref());
         Some(WindowUsage {
             pct,
             resets_at,
             countdown,
+            pace,
         })
     });
 
@@ -627,6 +757,24 @@ mod tests {
         assert_eq!(parsed.models.len(), 1);
         assert_eq!(parsed.models[0].name, "Sonnet");
         assert_eq!(parsed.models[0].pct, 45.0);
+    }
+
+    #[test]
+    fn test_calculate_pace() {
+        assert_eq!(calculate_pace(50.0, None), None);
+        // Past date
+        assert_eq!(calculate_pace(50.0, Some("2020-01-01T00:00:00Z")), None);
+
+        // Future date (e.g. 7 days from now)
+        let future = (Utc::now() + chrono::Duration::hours(100)).to_rfc3339();
+        let pace = calculate_pace(75.0, Some(&future));
+        assert!(pace.is_some());
+        let p = pace.unwrap();
+        assert!(p.burn_rate_per_hour > 0.0);
+        let cli_str = format_pace_cli(&p);
+        assert!(!cli_str.is_empty());
+        let tui_spans = render_pace_tui_spans(&p);
+        assert!(!tui_spans.is_empty());
     }
 }
 

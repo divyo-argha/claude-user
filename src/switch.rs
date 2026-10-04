@@ -40,6 +40,18 @@ pub fn run_switch(args: &[String]) -> Result<()> {
                 }
                 i += 1;
             }
+            "--best" => {
+                strategy = Some(AutoStrategy::Best);
+                i += 1;
+            }
+            "--consume-first" => {
+                strategy = Some(AutoStrategy::ConsumeFirst);
+                i += 1;
+            }
+            "--next-available" | "--next" => {
+                strategy = Some(AutoStrategy::NextAvailable);
+                i += 1;
+            }
             val if !val.starts_with('-') && target_profile.is_none() => {
                 target_profile = Some(val.to_string());
                 i += 1;
