@@ -889,40 +889,86 @@ fn draw(f: &mut Frame, state: &mut ListState, ctx: &DrawContext) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // Top Header Status Line
+            Constraint::Length(4), // Big Aesthetic Unicode Logo & System Header
             Constraint::Min(8),    // Side-by-Side Master-Detail Body
             Constraint::Length(4), // Bottom Status & Keybindings Panel
         ])
         .split(f.area());
 
+    let logo_color_1 = Color::Rgb(217, 119, 87); // Claude Terracotta / Coral
+    let logo_color_2 = Color::Rgb(148, 163, 184); // Slate
     let border_color = Color::Rgb(71, 85, 105);
     let accent_color = Color::Rgb(168, 85, 247); // Purple
     let active_color = Color::Rgb(74, 222, 128); // Green
     let muted_text = Color::Rgb(148, 163, 184);
 
-    // 1. Top Header Bar
-    let header_line = Line::from(vec![
-        Span::styled(
-            "✦ CLAUDE-USER v0.3.0",
-            Style::default().fg(accent_color).add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "  ─  Multi-Account & Quota Manager",
-            Style::default().fg(Color::Rgb(203, 213, 225)),
-        ),
-        match current_profile {
-            Some(curr) => Span::styled(
-                format!("    (active: {curr})"),
-                Style::default().fg(active_color).add_modifier(Modifier::BOLD),
-            ),
-            None => Span::raw(""),
-        },
-        Span::styled(
-            "   [Press ? for Help]",
-            Style::default().fg(Color::Yellow),
-        ),
+    // 1. Big Aesthetic Unicode Header
+    let header_chunks = if f.area().width >= 86 {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(48),
+                Constraint::Min(30),
+            ])
+            .split(chunks[0])
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(100),
+                Constraint::Length(0),
+            ])
+            .split(chunks[0])
+    };
+
+    let logo = Paragraph::new(vec![
+        Line::from(vec![
+            Span::styled("  ░█▀▀░█░░░█▀█░█░█░█▀▄░█▀▀", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::styled("░░░░░█░█░█▀▀░█▀▀░█▀▄", Style::default().fg(logo_color_2).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ░█░░░█░░░█▀█░█░█░█░█░█▀▀", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::styled("░▄▄▄░█░█░▀▀█░█▀▀░█▀▄", Style::default().fg(logo_color_2).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  ░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀░░▀▀▀", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::styled("░░░░░▀▀▀░▀▀▀░▀▀▀░▀░▀", Style::default().fg(logo_color_2).add_modifier(Modifier::BOLD)),
+        ]),
     ]);
-    f.render_widget(Paragraph::new(header_line), chunks[0]);
+    f.render_widget(logo, header_chunks[0]);
+
+    if f.area().width >= 86 {
+        let meta_lines = vec![
+            Line::from(vec![
+                Span::styled("✦ CLAUDE-USER ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+                Span::styled("v0.3.0", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled("  ─  Multi-Account & Quota Manager", Style::default().fg(Color::Rgb(148, 163, 184))),
+            ]),
+            Line::from(vec![
+                Span::styled("Active Profile: ", Style::default().fg(Color::Rgb(148, 163, 184))),
+                match current_profile {
+                    Some(curr) => Span::styled(
+                        format!("● {curr}"),
+                        Style::default().fg(active_color).add_modifier(Modifier::BOLD),
+                    ),
+                    None => Span::styled("(none)", Style::default().fg(Color::DarkGray)),
+                },
+            ]),
+            Line::from(vec![
+                Span::styled("Quick tip: ", Style::default().fg(Color::Rgb(100, 116, 139))),
+                Span::styled("Press ", Style::default().fg(Color::Rgb(148, 163, 184))),
+                Span::styled("[?]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" help  •  ", Style::default().fg(Color::Rgb(148, 163, 184))),
+                Span::styled("[/]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" filter  •  ", Style::default().fg(Color::Rgb(148, 163, 184))),
+                Span::styled("[o]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(" sort  •  ", Style::default().fg(Color::Rgb(148, 163, 184))),
+                Span::styled("[x]", Style::default().fg(Color::Rgb(56, 189, 248)).add_modifier(Modifier::BOLD)),
+                Span::styled(" session", Style::default().fg(Color::Rgb(148, 163, 184))),
+            ]),
+        ];
+        f.render_widget(Paragraph::new(meta_lines), header_chunks[1]);
+    }
 
     // 2. Responsive Main Area Layout
     let is_wide = f.area().width >= 80;
