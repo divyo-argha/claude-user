@@ -85,6 +85,14 @@ pub fn save_usage_cache(cache: &HashMap<String, AccountUsage>) -> Result<()> {
     Ok(())
 }
 
+pub fn invalidate_cache() -> Result<()> {
+    let file = usage_cache_file()?;
+    if file.exists() {
+        let _ = fs::remove_file(file);
+    }
+    Ok(())
+}
+
 pub fn format_reset_countdown(iso_str: &str) -> Option<String> {
     let dt = chrono::DateTime::parse_from_rfc3339(iso_str).ok()?;
     let now = Utc::now();
@@ -370,6 +378,53 @@ fn parse_usage_response(profile: &str, data: &serde_json::Value) -> AccountUsage
         fetched_at: Utc::now().timestamp(),
         error_message: None,
     }
+}
+
+pub fn import_usage_data(json_str: &str, _hold_secs: u64) -> Result<usize> {
+    let mut cache = load_usage_cache().unwrap_or_default();
+    let now = Utc::now().timestamp();
+    let mut imported = 0;
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+        let items: Vec<serde_json::Value> = if let Some(arr) = val.get("profiles").and_then(|p| p.as_array()) {
+            arr.clone()
+        } else if let Some(arr) = val.as_array() {
+            arr.clone()
+        } else {
+            vec![val.clone()]
+        };
+
+        for item in items {
+            let mut usage_opt: Option<AccountUsage> = None;
+            let mut target_name = None;
+
+            if let Some(u_val) = item.get("usage") {
+                if let Ok(u) = serde_json::from_value::<AccountUsage>(u_val.clone()) {
+                    usage_opt = Some(u);
+                }
+            } else if let Ok(u) = serde_json::from_value::<AccountUsage>(item.clone()) {
+                usage_opt = Some(u);
+            }
+
+            if let Some(name) = item.get("name").and_then(|n| n.as_str()) {
+                target_name = Some(name.to_string());
+            }
+
+            if let Some(mut u) = usage_opt {
+                let name = target_name.unwrap_or_else(|| u.profile.clone());
+                u.profile = name.clone();
+                u.fetched_at = now;
+                cache.insert(name, u);
+                imported += 1;
+            }
+        }
+    }
+
+    if imported > 0 {
+        save_usage_cache(&cache)?;
+    }
+
+    Ok(imported)
 }
 
 #[cfg(test)]

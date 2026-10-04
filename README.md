@@ -121,33 +121,66 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 ### Primary Actions
 | Command | Short / Alias | Description | Example |
 | :--- | :--- | :--- | :--- |
-| `cuser` | | Open the interactive console profile picker | `cuser` |
-| `cuser <profile>` | | Launch Claude with this profile (creates it if new) | `cuser work` |
+| `cuser` | | Open the interactive console profile picker with live quota badges | `cuser` |
+| `cuser <profile>` | | Launch Claude with this profile (creates it if new) and points global symlinks at it | `cuser work` |
 | `cuser <profile> [args...]` | | Launch profile, forwarding all remaining arguments to Claude | `cuser personal --continue` |
-| `cuser run [args...]` | | Launch profile mapped to current directory | `cuser run --resume` |
+| `cuser switch [profile]` | | Switch active profile without launching Claude (`--strategy best\|next\|consume-first`) | `cuser switch personal` |
+| `cuser run [profile] [args...]` | | Launch in isolated session mode (concurrent multi-account support) | `cuser run personal --resume` |
 
-### Directory Mapping
+### Quota Tracking & Auto-Switching
 | Command | Description | Example |
 | :--- | :--- | :--- |
+| `cuser usage [profile]` | Show detailed 5-hour, 7-day, extra spend, and per-model limits | `cuser usage work` |
+| `cuser auto` | Monitor active account and auto-rotate before hitting rate limits | `cuser auto --threshold 85` |
+| `cuser auto --once` | Run a single auto-switch check (exit `0` switched, `2` healthy, `3` blocked) | `cuser auto --once --strategy consume-first` |
+| `cuser auto --model <name>` | Also rotate when specific model weekly limit exceeds threshold | `cuser auto --model Fable` |
+| `cuser import-usage <file\|->` | Import usage snapshot readings from another machine | `cuser import-usage usage.json` |
+
+### Headless Ingestion & Backup
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `cuser add-token <token> <name>` | Register account from raw OAuth setup token or API key | `cuser add-token sk-ant-oat01-... work` |
+| `cuser add-token - <name>` | Read token securely from standard input (stdin) | `cat token.txt \| cuser add-token - work` |
+| `cuser export [file]` | Export profiles and credentials to a portable JSON backup | `cuser export backup.json` |
+| `cuser export -` | Output backup JSON to stdout (for scripting or piping to gpg) | `cuser export - > backup.json` |
+| `cuser import <file> [--force]` | Import profiles from JSON backup file | `cuser import backup.json --force` |
+
+### Aliases & Directory Mapping
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `cuser alias [profile] [alias]` | Assign a short alias to a profile (or list all aliases) | `cuser alias fugitive_stranger dev` |
+| `cuser unalias <alias>` | Remove a profile alias | `cuser unalias dev` |
 | `cuser map` | List all directory mappings and show active mapping for cwd | `cuser map` |
 | `cuser map <profile> [dir]` | Map directory to a profile (defaults to current dir `.`) | `cuser map work ~/work/client-app` |
 | `cuser unmap [dir]` | Remove a directory mapping (defaults to current dir `.`) | `cuser unmap` |
 
-### Profile & Config Management
+### Configuration & Tool Settings
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `cuser config` | List all tool settings (`settings.json`) and active defaults | `cuser config` |
+| `cuser config get <key>` | Get setting value (e.g. `autoswitch.threshold`) | `cuser config get autoswitch.threshold` |
+| `cuser config set <key> <val>` | Set tool setting value | `cuser config set autoswitch.threshold 85` |
+| `cuser config unset <key>` | Reset setting back to default | `cuser config unset autoswitch.threshold` |
+| `cuser config path` | Print the path to `settings.json` | `cuser config path` |
+
+### Profile & Session Management
 | Command | Alias / Alternates | Description | Example |
 | :--- | :--- | :--- | :--- |
 | `cuser import [name]` | `cuser migrate [name]` | Import current `~/.claude` credentials as a profile | `cuser import work` |
-| `cuser list [--json]` | `cuser -l` | List all profiles with linked email/org information | `cuser list --json` |
-| `cuser current [--json]` | `cuser status`, `active` | Show current active profile | `cuser current --json` |
+| `cuser list [--json]` | `cuser -l` | List all profiles with linked email/org, 5h/7d quota bars, and countdowns | `cuser list --refresh` |
+| `cuser list --token-status` | | List profiles with credential storage diagnostics and token expiry | `cuser list --token-status` |
+| `cuser current [--json]` | `cuser status`, `active` | Show current active profile and live quota status | `cuser current --json` |
 | `cuser disable <profile>` | | Mark profile as disabled (excluded from rotation) | `cuser disable client-temp` |
 | `cuser enable <profile>` | | Re-enable a disabled profile | `cuser enable client-temp` |
-| `cuser rename <old> <new>` | | Rename an existing profile (auto-updates directory mappings) | `cuser rename main work` |
+| `cuser rename <old> <new>` | | Rename an existing profile (auto-updates directory mappings & aliases) | `cuser rename main work` |
 | `cuser remove <profile>` | `cuser rm`, `cuser delete` | Delete profile directory and stored credentials (asks confirmation) | `cuser remove personal` |
+| `cuser purge` | | Permanently remove all claude-user profiles, aliases, and settings | `cuser purge` |
 | `cuser sync` | | Sync files from `shared/` directory into all profiles | `cuser sync` |
 
-### System Commands
+### Shell Completions & System Commands
 | Command | Short / Alias | Description |
 | :--- | :--- | :--- |
+| `cuser completions <shell>` | | Generate autocompletions for `bash`, `zsh`, `fish`, or `powershell` |
 | `cuser --update` | `cuser update` | Check and update to the latest release version |
 | `cuser --version` | `cuser -v` | Show installed version |
 | `cuser --help` | `cuser -h` | Show help message |
@@ -160,23 +193,30 @@ If you run `cuser` with no arguments, it opens the interactive Terminal User Int
 
 ```
 ┌ KEYBINDINGS ─────────────────────────────────────────────────────────────┐
-│ ↑/↓ Navigate | Enter ↵ Launch | r Rename | e Disable/Enable | d Delete | q Quit │
+│ ↑/↓ Navigate  | Enter ↵ Launch  | s Switch Active  | a Set Alias  | m Map CWD│
+│ e Disable/Enable  | r Rename  | d Delete  | u Refresh Quota  | q Quit    │
 ├──────────────────────────────────────────────────────────────────────────┤
 │ PROFILES (active: work)                                                  │
-│ ▶ work        (you@company.com • Acme Corp)  ● current  ★ mapped         │
-│   personal    (you@gmail.com)                                            │
+│ ▶ work        (@dev • you@company.com • Acme) [5h: 12% | 7d: 34%] ● current│
+│   personal    (you@gmail.com)  [5h: 65% | 7d: 80%]                       │
 │   client-temp (client@org.com)  [disabled]                               │
 │   + Import ~/.claude                                                     │
 │   + New profile                                                          │
+├──────────────────────────────────────────────────────────────────────────┤
+│ STATUS: Quota: 5h: [██░░░░░░░░░░] (2h 15m)  |  7d: [█████░░░░░░] (1d 4h) │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Keyboard Navigation
+### Keyboard Navigation & Hotkeys
 * <kbd>↑</kbd> or <kbd>k</kbd> / <kbd>↓</kbd> or <kbd>j</kbd>: Navigate through profiles
-* <kbd>Enter ↵</kbd>: Select and launch the profile
-* <kbd>r</kbd>: Rename the highlighted profile
+* <kbd>Enter ↵</kbd>: Select and launch the profile with Claude Code
+* <kbd>s</kbd>: Switch active profile symlink immediately without launching Claude
+* <kbd>a</kbd>: Set or edit short alias for the highlighted profile
+* <kbd>m</kbd>: Map or unmap current working directory to the highlighted profile
+* <kbd>u</kbd>: Force refresh live quota and rate limit status from Anthropic API
 * <kbd>e</kbd>: Toggle disabling / enabling the highlighted profile
-* <kbd>d</kbd>: Delete the highlighted profile (will ask for `y`/`n` confirmation)
+* <kbd>r</kbd>: Rename the highlighted profile
+* <kbd>d</kbd>: Delete the highlighted profile (asks for confirmation)
 * <kbd>q</kbd> or <kbd>Esc</kbd>: Exit the picker
 
 ---

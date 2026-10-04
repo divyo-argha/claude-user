@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, Terminal};
 use std::io::{stdout, Stdout};
 
+use crate::aliases;
 use crate::mappings;
 use crate::profiles;
 
@@ -30,6 +31,12 @@ enum Action {
     New,
     Import,
     Rename { old: String },
+    Alias { profile: String },
+}
+
+enum StatusMessage {
+    Error(String),
+    Info(String),
 }
 
 enum Mode {
@@ -73,6 +80,7 @@ fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
     let mapped_profile = cwd.as_ref().and_then(|p| {
         mappings::resolve_mapping(p).ok().flatten().map(|(name, _)| name)
     });
+    let aliases_map = aliases::load_aliases().unwrap_or_default();
 
     let mut items = Vec::new();
     let mut current_idx = None;
@@ -91,11 +99,30 @@ fn build_items() -> Result<(Vec<Item>, Option<String>, Option<usize>)> {
             org_name: None,
             is_disabled,
         });
-        let display = match (info.email, info.org_name) {
-            (Some(email), Some(org)) => format!("{name}  ({email} • {org})"),
-            (Some(email), None) => format!("{name}  ({email})"),
-            (None, _) => name.clone(),
+
+        let my_aliases: Vec<&str> = aliases_map
+            .iter()
+            .filter(|(_, target)| target.as_str() == name)
+            .map(|(a, _)| a.as_str())
+            .collect();
+
+        let mut details = Vec::new();
+        if !my_aliases.is_empty() {
+            details.push(format!("@{}", my_aliases.join(", @")));
+        }
+        if let Some(email) = info.email {
+            details.push(email);
+        }
+        if let Some(org) = info.org_name {
+            details.push(org);
+        }
+
+        let display = if details.is_empty() {
+            name.clone()
+        } else {
+            format!("{name}  ({})", details.join(" • "))
         };
+
         let usage_data = crate::usage::get_profile_usage(&name, false).ok().map(Box::new);
         items.push(Item::Profile {
             name,
@@ -139,10 +166,10 @@ fn event_loop(
     let mut list_state = ListState::default();
     list_state.select(Some(current_idx.unwrap_or(0)));
     let mut mode = Mode::Picking;
-    let mut error: Option<String> = None;
+    let mut status: Option<StatusMessage> = None;
 
     loop {
-        terminal.draw(|f| draw(f, &items, &mut list_state, &mode, &error, &current_profile))?;
+        terminal.draw(|f| draw(f, &items, &mut list_state, &mode, &status, &current_profile))?;
 
         let Event::Key(key) = event::read()? else {
             continue;
@@ -167,10 +194,99 @@ fn event_loop(
                         list_state.select(Some(i + 1));
                     }
                 }
+                KeyCode::Char('s') => {
+                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                        match profiles::activate_profile(&name) {
+                            Ok(()) => {
+                                current_profile = Some(name.clone());
+                                let sel = list_state.selected();
+                                let (new_items, _, _) = build_items()?;
+                                items = new_items;
+                                list_state.select(sel);
+                                status = Some(StatusMessage::Info(format!(
+                                    "Switched active profile to \"{name}\". Run `claude` to use it."
+                                )));
+                            }
+                            Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                        }
+                    }
+                }
+                KeyCode::Char('a') => {
+                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                        let existing = aliases::aliases_for_profile(&name).unwrap_or_default();
+                        let initial = existing.first().cloned().unwrap_or_default();
+                        mode = Mode::Naming {
+                            action: Action::Alias { profile: name },
+                            buffer: initial,
+                        };
+                        status = None;
+                    }
+                }
+                KeyCode::Char('m') => {
+                    if let Some(name) = selected_profile_name(&items, &list_state)
+                        && let Ok(cwd) = std::env::current_dir()
+                    {
+                        let is_mapped_to_selected = mappings::resolve_mapping(&cwd)
+                            .ok()
+                            .flatten()
+                            .map(|(p, _)| p == name)
+                            .unwrap_or(false);
+
+                        let cwd_str = cwd.to_string_lossy();
+                        if is_mapped_to_selected {
+                            match mappings::remove_mapping(Some(cwd_str.as_ref())) {
+                                Ok((path, Some(prev))) => {
+                                    let sel = list_state.selected();
+                                    let (new_items, _, _) = build_items()?;
+                                    items = new_items;
+                                    list_state.select(sel);
+                                    status = Some(StatusMessage::Info(format!(
+                                        "Unmapped directory \"{}\" from \"{prev}\".",
+                                        path.display()
+                                    )));
+                                }
+                                Ok((_, None)) => {}
+                                Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                            }
+                        } else {
+                            match mappings::add_mapping(&name, Some(cwd_str.as_ref())) {
+                                Ok(path) => {
+                                    let sel = list_state.selected();
+                                    let (new_items, _, _) = build_items()?;
+                                    items = new_items;
+                                    list_state.select(sel);
+                                    status = Some(StatusMessage::Info(format!(
+                                        "Mapped \"{}\" -> \"{name}\".",
+                                        path.display()
+                                    )));
+                                }
+                                Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('u') => {
+                    if let Some(name) = selected_profile_name(&items, &list_state) {
+                        match crate::usage::get_profile_usage(&name, true) {
+                            Ok(_) => {
+                                let sel = list_state.selected();
+                                let (new_items, _, _) = build_items()?;
+                                items = new_items;
+                                list_state.select(sel);
+                                status = Some(StatusMessage::Info(format!(
+                                    "Refreshed quota for \"{name}\"."
+                                )));
+                            }
+                            Err(e) => {
+                                status = Some(StatusMessage::Error(format!("Usage error: {e}")));
+                            }
+                        }
+                    }
+                }
                 KeyCode::Char('d') => {
                     if let Some(name) = selected_profile_name(&items, &list_state) {
                         mode = Mode::ConfirmDelete { name };
-                        error = None;
+                        status = None;
                     }
                 }
                 KeyCode::Char('r') => {
@@ -179,7 +295,7 @@ fn event_loop(
                             action: Action::Rename { old: name.clone() },
                             buffer: name,
                         };
-                        error = None;
+                        status = None;
                     }
                 }
                 KeyCode::Char('e') => {
@@ -193,9 +309,11 @@ fn event_loop(
                                 current_profile = new_current;
                                 list_state.select(sel);
                                 let state_str = if !is_disabled { "disabled" } else { "enabled" };
-                                error = Some(format!("Profile \"{name}\" is now {state_str}."));
+                                status = Some(StatusMessage::Info(format!(
+                                    "Profile \"{name}\" is now {state_str}."
+                                )));
                             }
-                            Err(e) => error = Some(e.to_string()),
+                            Err(e) => status = Some(StatusMessage::Error(e.to_string())),
                         }
                     }
                 }
@@ -210,47 +328,78 @@ fn event_loop(
                         }
                         Item::Profile { name, .. } => return Ok(Some(PickResult::Existing(name.clone()))),
                     }
-                    error = None;
+                    status = None;
                 }
                 _ => {}
             },
             Mode::Naming { action, buffer } => match key.code {
                 KeyCode::Esc => {
                     mode = Mode::Picking;
-                    error = None;
+                    status = None;
                 }
                 KeyCode::Enter => {
-                    let name = buffer.trim().to_string();
-                    if let Action::Rename { old } = action {
-                        let old = old.clone();
-                        if name.is_empty() {
-                            error = Some("profile name cannot be empty".to_string());
-                        } else if name == old {
-                            mode = Mode::Picking;
-                            error = None;
-                        } else {
-                            match profiles::rename_profile(&old, &name) {
-                                Ok(()) => {
-                                    let (new_items, new_current, new_idx) = build_items()?;
-                                    items = new_items;
-                                    current_profile = new_current;
-                                    list_state.select(Some(new_idx.unwrap_or(0)));
-                                    mode = Mode::Picking;
-                                    error = None;
+                    let text = buffer.trim().to_string();
+                    match action {
+                        Action::Alias { profile } => {
+                            let profile = profile.clone();
+                            if text.is_empty() {
+                                let _ = aliases::remove_aliases_for_profile(&profile);
+                                let (new_items, new_current, _) = build_items()?;
+                                items = new_items;
+                                current_profile = new_current;
+                                mode = Mode::Picking;
+                                status = Some(StatusMessage::Info(format!(
+                                    "Cleared aliases for \"{profile}\"."
+                                )));
+                            } else {
+                                match aliases::set_alias_quiet(&profile, &text) {
+                                    Ok(()) => {
+                                        let (new_items, new_current, _) = build_items()?;
+                                        items = new_items;
+                                        current_profile = new_current;
+                                        mode = Mode::Picking;
+                                        status = Some(StatusMessage::Info(format!(
+                                            "Aliased \"{text}\" -> \"{profile}\"."
+                                        )));
+                                    }
+                                    Err(e) => status = Some(StatusMessage::Error(e.to_string())),
                                 }
-                                Err(e) => error = Some(e.to_string()),
                             }
                         }
-                    } else {
-                        match profiles::validate_profile_name(&name) {
-                            Ok(()) => {
-                                return Ok(Some(match action {
-                                    Action::New => PickResult::New(name),
-                                    Action::Import => PickResult::Import(name),
-                                    Action::Rename { .. } => unreachable!(),
-                                }));
+                        Action::Rename { old } => {
+                            let old = old.clone();
+                            if text.is_empty() {
+                                status = Some(StatusMessage::Error("profile name cannot be empty".to_string()));
+                            } else if text == old {
+                                mode = Mode::Picking;
+                                status = None;
+                            } else {
+                                match profiles::rename_profile(&old, &text) {
+                                    Ok(()) => {
+                                        let (new_items, new_current, new_idx) = build_items()?;
+                                        items = new_items;
+                                        current_profile = new_current;
+                                        list_state.select(Some(new_idx.unwrap_or(0)));
+                                        mode = Mode::Picking;
+                                        status = Some(StatusMessage::Info(format!(
+                                            "Renamed profile to \"{text}\"."
+                                        )));
+                                    }
+                                    Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                                }
                             }
-                            Err(e) => error = Some(e.to_string()),
+                        }
+                        Action::New => {
+                            match profiles::validate_profile_name(&text) {
+                                Ok(()) => return Ok(Some(PickResult::New(text))),
+                                Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                            }
+                        }
+                        Action::Import => {
+                            match profiles::validate_profile_name(&text) {
+                                Ok(()) => return Ok(Some(PickResult::Import(text))),
+                                Err(e) => status = Some(StatusMessage::Error(e.to_string())),
+                            }
                         }
                     }
                 }
@@ -260,30 +409,33 @@ fn event_loop(
                 KeyCode::Char(c) => buffer.push(c),
                 _ => {}
             },
-            Mode::ConfirmDelete { name } => match key.code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => match profiles::remove_profile(name) {
-                    Ok(()) => {
-                        let (new_items, new_current, _) = build_items()?;
-                        items = new_items;
-                        current_profile = new_current;
-                        let idx = list_state
-                            .selected()
-                            .unwrap_or(0)
-                            .min(items.len().saturating_sub(1));
-                        list_state.select(Some(idx));
+            Mode::ConfirmDelete { name } => {
+                let name = name.clone();
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => match profiles::remove_profile(&name) {
+                        Ok(()) => {
+                            let (new_items, new_current, _) = build_items()?;
+                            items = new_items;
+                            current_profile = new_current;
+                            let idx = list_state
+                                .selected()
+                                .unwrap_or(0)
+                                .min(items.len().saturating_sub(1));
+                            list_state.select(Some(idx));
+                            mode = Mode::Picking;
+                            status = Some(StatusMessage::Info(format!("Deleted profile \"{name}\".")));
+                        }
+                        Err(e) => {
+                            mode = Mode::Picking;
+                            status = Some(StatusMessage::Error(e.to_string()));
+                        }
+                    },
+                    _ => {
                         mode = Mode::Picking;
-                        error = None;
+                        status = None;
                     }
-                    Err(e) => {
-                        mode = Mode::Picking;
-                        error = Some(e.to_string());
-                    }
-                },
-                _ => {
-                    mode = Mode::Picking;
-                    error = None;
                 }
-            },
+            }
         }
     }
 }
@@ -293,7 +445,7 @@ fn draw(
     items: &[Item],
     state: &mut ListState,
     mode: &Mode,
-    error: &Option<String>,
+    status: &Option<StatusMessage>,
     current_profile: &Option<String>,
 ) {
     let logo_color_1 = Color::Rgb(217, 119, 87);
@@ -305,7 +457,7 @@ fn draw(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
-            Constraint::Length(3),
+            Constraint::Length(4),
             Constraint::Min(5),
             Constraint::Length(3),
         ])
@@ -333,15 +485,25 @@ fn draw(
             Span::raw("Navigate  |  "),
             Span::styled(" Enter ↵ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Launch  |  "),
+            Span::styled(" s ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Switch Active  |  "),
+            Span::styled(" a ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Set Alias  |  "),
+            Span::styled(" m ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Map CWD"),
+        ]),
+        Line::from(vec![
+            Span::styled(" e ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Toggle Disabled  |  "),
             Span::styled(" r ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Rename  |  "),
-            Span::styled(" e ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-            Span::raw("Disable/Enable  |  "),
             Span::styled(" d ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Delete  |  "),
+            Span::styled(" u ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Refresh Quota  |  "),
             Span::styled(" q / Esc ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Quit"),
-        ])
+        ]),
     ])
     .block(
         Block::default()
@@ -441,69 +603,68 @@ fn draw(
         );
     f.render_stateful_widget(list, chunks[2], state);
 
-    let bottom_text = match mode {
+    let (bottom_text, bottom_style) = match mode {
         Mode::Picking => {
-            if let Some(e) = error {
-                format!("Error: {e}")
-            } else if let Some(Item::Profile { usage: Some(u), .. }) = items.get(state.selected().unwrap_or(0)) {
-                match u.status {
-                    crate::usage::UsageStatus::Ok => {
-                        let h5_str = u.five_hour.as_ref().map(|h| {
-                            let bar = crate::usage::render_progress_bar(h.pct, 10);
-                            let rst = h.countdown.as_deref().unwrap_or("?");
-                            format!("5h: {bar} ({rst})")
-                        }).unwrap_or_default();
+            match status {
+                Some(StatusMessage::Error(e)) => (format!("Error: {e}"), Style::default().fg(Color::Red)),
+                Some(StatusMessage::Info(msg)) => (msg.clone(), Style::default().fg(Color::Green)),
+                None => {
+                    if let Some(Item::Profile { usage: Some(u), .. }) = items.get(state.selected().unwrap_or(0)) {
+                        match u.status {
+                            crate::usage::UsageStatus::Ok => {
+                                let h5_str = u.five_hour.as_ref().map(|h| {
+                                    let bar = crate::usage::render_progress_bar(h.pct, 10);
+                                    let rst = h.countdown.as_deref().unwrap_or("?");
+                                    format!("5h: {bar} ({rst})")
+                                }).unwrap_or_default();
 
-                        let d7_str = u.seven_day.as_ref().map(|d| {
-                            let bar = crate::usage::render_progress_bar(d.pct, 10);
-                            let rst = d.countdown.as_deref().unwrap_or("?");
-                            format!("7d: {bar} ({rst})")
-                        }).unwrap_or_default();
+                                let d7_str = u.seven_day.as_ref().map(|d| {
+                                    let bar = crate::usage::render_progress_bar(d.pct, 10);
+                                    let rst = d.countdown.as_deref().unwrap_or("?");
+                                    format!("7d: {bar} ({rst})")
+                                }).unwrap_or_default();
 
-                        format!("Quota: {h5_str}  |  {d7_str}")
-                    }
-                    crate::usage::UsageStatus::TokenExpired => {
-                        "Quota: OAuth token expired (select & launch to re-authenticate)".to_string()
-                    }
-                    crate::usage::UsageStatus::RateLimited => {
-                        "Quota: Rate-limited on Anthropic usage endpoint (429)".to_string()
-                    }
-                    crate::usage::UsageStatus::NoUsageAccess => {
-                        "Quota: Account tier does not report OAuth usage quota".to_string()
-                    }
-                    crate::usage::UsageStatus::Unavailable => {
+                                (format!("Quota: {h5_str}  |  {d7_str}"), Style::default().fg(Color::White))
+                            }
+                            crate::usage::UsageStatus::TokenExpired => {
+                                ("Quota: OAuth token expired (select & launch to re-authenticate)".to_string(), Style::default().fg(Color::Yellow))
+                            }
+                            crate::usage::UsageStatus::RateLimited => {
+                                ("Quota: Rate-limited on Anthropic usage endpoint (429)".to_string(), Style::default().fg(Color::Yellow))
+                            }
+                            crate::usage::UsageStatus::NoUsageAccess => {
+                                ("Quota: Account tier does not report OAuth usage quota".to_string(), Style::default().fg(Color::DarkGray))
+                            }
+                            crate::usage::UsageStatus::Unavailable => {
+                                match current_profile {
+                                    Some(curr) => (format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""), Style::default()),
+                                    None => ("Select a profile and press Enter.".to_string(), Style::default()),
+                                }
+                            }
+                        }
+                    } else {
                         match current_profile {
-                            Some(curr) => format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""),
-                            None => "Select a profile and press Enter.".to_string(),
+                            Some(curr) => (format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""), Style::default()),
+                            None => ("Select a profile and press Enter.".to_string(), Style::default()),
                         }
                     }
-                }
-            } else {
-                match current_profile {
-                    Some(curr) => format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""),
-                    None => "Select a profile and press Enter.".to_string(),
                 }
             }
         }
         Mode::Naming { action, buffer } => {
             let label = match action {
                 Action::Rename { .. } => "New name",
+                Action::Alias { .. } => "Alias (blank to unset)",
                 _ => "Name",
             };
-            match error {
-                Some(e) => format!("{label}: {buffer}_   ({e})"),
-                None => format!("{label}: {buffer}_   (Enter to confirm, Esc to cancel)"),
+            match status {
+                Some(StatusMessage::Error(e)) => (format!("{label}: {buffer}_   ({e})"), Style::default().fg(Color::Red)),
+                _ => (format!("{label}: {buffer}_   (Enter to confirm, Esc to cancel)"), Style::default().fg(Color::White)),
             }
         }
         Mode::ConfirmDelete { name } => {
-            format!("Delete profile \"{name}\"? This removes its stored login. [y/N]")
+            (format!("Delete profile \"{name}\"? This removes its stored login. [y/N]"), Style::default().fg(Color::Yellow))
         }
-    };
-    
-    let bottom_style = if error.is_some() {
-        Style::default().fg(Color::Red)
-    } else {
-        Style::default()
     };
 
     let bottom = Paragraph::new(Line::from(Span::styled(bottom_text, bottom_style)))

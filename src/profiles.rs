@@ -262,6 +262,7 @@ pub fn remove_profile(name: &str) -> Result<()> {
         bail!("profile \"{name}\" does not exist");
     }
     let _ = crate::mappings::remove_profile_mappings(name);
+    let _ = crate::aliases::remove_aliases_for_profile(name);
     retarget_active(&dir, None)?;
     fs::remove_dir_all(&dir)?;
     Ok(())
@@ -279,6 +280,7 @@ pub fn rename_profile(old: &str, new: &str) -> Result<()> {
         bail!("profile \"{new}\" already exists");
     }
     let _ = crate::mappings::rename_profile_mappings(old, new);
+    let _ = crate::aliases::rename_profile_aliases(old, new);
     retarget_active(&old_dir, Some(&new_dir))?;
     fs::rename(&old_dir, &new_dir)?;
     Ok(())
@@ -336,14 +338,14 @@ fn harden_dir(_path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn harden_file(path: &Path) -> Result<()> {
+pub(crate) fn harden_file(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn harden_file(_path: &Path) -> Result<()> {
+pub(crate) fn harden_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 

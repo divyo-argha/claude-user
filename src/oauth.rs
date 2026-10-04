@@ -29,6 +29,19 @@ pub struct OAuthData {
 pub struct StoredCredentials {
     #[serde(rename = "claudeAiOauth")]
     pub claude_ai_oauth: Option<OAuthData>,
+    #[serde(rename = "apiKey")]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TokenStatusSummary {
+    pub source: String,
+    pub token_type: String,
+    pub access_token_expires_at: Option<String>,
+    pub access_token_expired: bool,
+    pub refresh_token_present: bool,
+    pub refresh_token_expires_at: Option<String>,
+    pub scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +122,7 @@ pub fn load_profile_credentials(profile_name: &str) -> Result<Option<ProfileCred
         let service = get_keychain_service_name(&dir);
         if let Some(content) = read_keychain(&service, &account)
             && let Ok(creds) = serde_json::from_str::<StoredCredentials>(&content)
-            && creds.claude_ai_oauth.is_some()
+            && (creds.claude_ai_oauth.is_some() || creds.api_key.is_some())
         {
             return Ok(Some(ProfileCredentials {
                 data: creds,
@@ -122,7 +135,7 @@ pub fn load_profile_credentials(profile_name: &str) -> Result<Option<ProfileCred
             let default_service = "Claude Code-credentials";
             if let Some(content) = read_keychain(default_service, &account)
                 && let Ok(creds) = serde_json::from_str::<StoredCredentials>(&content)
-                && creds.claude_ai_oauth.is_some()
+                && (creds.claude_ai_oauth.is_some() || creds.api_key.is_some())
             {
                 return Ok(Some(ProfileCredentials {
                     data: creds,
@@ -137,7 +150,7 @@ pub fn load_profile_credentials(profile_name: &str) -> Result<Option<ProfileCred
     if file_path.exists()
         && let Ok(content) = fs::read_to_string(&file_path)
         && let Ok(creds) = serde_json::from_str::<StoredCredentials>(&content)
-        && creds.claude_ai_oauth.is_some()
+        && (creds.claude_ai_oauth.is_some() || creds.api_key.is_some())
     {
         return Ok(Some(ProfileCredentials {
             data: creds,
@@ -153,7 +166,7 @@ pub fn load_profile_credentials(profile_name: &str) -> Result<Option<ProfileCred
         if default_file.exists()
             && let Ok(content) = fs::read_to_string(&default_file)
             && let Ok(creds) = serde_json::from_str::<StoredCredentials>(&content)
-            && creds.claude_ai_oauth.is_some()
+            && (creds.claude_ai_oauth.is_some() || creds.api_key.is_some())
         {
             return Ok(Some(ProfileCredentials {
                 data: creds,
@@ -163,6 +176,55 @@ pub fn load_profile_credentials(profile_name: &str) -> Result<Option<ProfileCred
     }
 
     Ok(None)
+}
+
+pub fn get_token_status(profile_name: &str) -> Option<TokenStatusSummary> {
+    let creds = load_profile_credentials(profile_name).ok()??;
+    let source_str = match &creds.source {
+        CredentialSource::Keychain(svc) => format!("Keychain ({svc})"),
+        CredentialSource::File(p) => format!("File ({})", p.display()),
+    };
+
+    if let Some(oauth) = &creds.data.claude_ai_oauth {
+        let is_setup_token = oauth.access_token.starts_with("sk-ant-oat01-")
+            || (oauth.access_token.starts_with("sk-ant-oat") && oauth.refresh_token.is_none());
+        let token_type = if is_setup_token {
+            "OAuth Setup Token".to_string()
+        } else {
+            "OAuth (Browser/CLI)".to_string()
+        };
+
+        let access_exp_str = oauth.expires_at.and_then(|ms| {
+            chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
+        });
+        let access_expired = is_token_expired(oauth.expires_at);
+
+        let refresh_exp_str = oauth.refresh_token_expires_at.and_then(|ms| {
+            chrono::DateTime::from_timestamp_millis(ms).map(|dt| dt.to_rfc3339())
+        });
+
+        Some(TokenStatusSummary {
+            source: source_str,
+            token_type,
+            access_token_expires_at: access_exp_str,
+            access_token_expired: access_expired,
+            refresh_token_present: oauth.refresh_token.is_some(),
+            refresh_token_expires_at: refresh_exp_str,
+            scopes: oauth.scopes.clone(),
+        })
+    } else if creds.data.api_key.is_some() {
+        Some(TokenStatusSummary {
+            source: source_str,
+            token_type: "Anthropic API Key".to_string(),
+            access_token_expires_at: None,
+            access_token_expired: false,
+            refresh_token_present: false,
+            refresh_token_expires_at: None,
+            scopes: None,
+        })
+    } else {
+        None
+    }
 }
 
 pub fn is_token_expired(expires_at: Option<i64>) -> bool {
