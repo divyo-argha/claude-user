@@ -225,7 +225,20 @@ pub fn get_profile_usage(profile: &str, force_refresh: bool) -> Result<AccountUs
         return Ok(refreshed);
     }
 
-    let usage = fetch_profile_usage_live(profile)?;
+    let previous = cache.get(profile).cloned();
+    let mut usage = fetch_profile_usage_live(profile)?;
+
+    // If live fetch was throttled (429) or unavailable, retain previous known quota limits
+    if (usage.status == UsageStatus::RateLimited || usage.status == UsageStatus::Unavailable)
+        && let Some(prev) = &previous
+        && prev.five_hour.is_some()
+    {
+        usage.five_hour = prev.five_hour.clone();
+        usage.seven_day = prev.seven_day.clone();
+        usage.spend = prev.spend.clone();
+        usage.models = prev.models.clone();
+    }
+
     cache.insert(profile.to_string(), usage.clone());
     let _ = save_usage_cache(&cache);
     Ok(usage)
