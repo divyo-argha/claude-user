@@ -48,6 +48,7 @@ USAGE:
     claude-user current            show the profile currently pointed to by `claude`
     claude-user map [profile] [dir] bind a directory to a profile (or list mappings)
     claude-user unmap [dir]        remove a directory mapping
+    claude-user add <profile>      create a new profile and log into an account (alias: new)
     claude-user disable <profile>  hold a profile out of rotation
     claude-user enable <profile>   re-enable a disabled profile
     claude-user sync               copy shared config into every existing profile
@@ -71,8 +72,8 @@ FLAGS:
     --dry-run                      simulate auto-switch without activating profile
     --force                        overwrite existing accounts during import
 
-The picker (plain `claude-user` / `cuser`) also offers \"+ Import ~/.claude\" whenever a
-default ~/.claude exists, and \"+ New profile\" to log into a brand-new account.
+The picker (plain `claude-user` / `cuser`) offers \"+ Add new account / profile (press 'n')\",
+and \"+ Import ~/.claude account (press 'i')\" whenever a default ~/.claude exists.
 Highlighting an existing profile in the picker also offers `d` to delete it,
 `r` to rename it, and `e` to toggle disabling/enabling it.
 
@@ -174,6 +175,7 @@ pub fn run() -> Result<()> {
         "add-token" => cmd_add_token(&args[1..]),
         "export" => cmd_export(&args[1..]),
         "import" | "migrate" => cmd_import(&args[1..]),
+        "new" | "add" | "create" => cmd_new(args.get(1).cloned()),
         "remove" | "rm" | "delete" => cmd_remove(args.get(1).cloned()),
         "rename" => cmd_rename(args.get(1).cloned(), args.get(2).cloned()),
         "watch" | "top" => {
@@ -237,6 +239,31 @@ fn launch_profile(name: &str, args: &[String]) -> Result<()> {
     profiles::activate_profile(name)?;
     let dir = profiles::profile_dir(name)?;
     launch::launch_claude(&dir, args)
+}
+
+fn cmd_new(name_arg: Option<String>) -> Result<()> {
+    let name = match name_arg {
+        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+        _ => {
+            eprint!("Enter name for new account/profile: ");
+            std::io::stdout().flush().ok();
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            line.trim().to_string()
+        }
+    };
+    if name.is_empty() {
+        bail!("profile name cannot be empty");
+    }
+    profiles::validate_profile_name(&name)?;
+    if profiles::profile_exists(&name)? {
+        bail!("profile \"{name}\" already exists. Run `cuser {name}` to use it.");
+    }
+    profiles::check_default_available()?;
+    profiles::create_profile(&name)?;
+    eprintln!("Created new profile \"{name}\".");
+    eprintln!("Launching Claude Code for initial account sign-in...");
+    launch_profile(&name, &[])
 }
 
 fn launch_session_profile(name: &str, args: &[String]) -> Result<()> {

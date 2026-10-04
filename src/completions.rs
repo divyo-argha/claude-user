@@ -29,6 +29,8 @@ const ZSH_COMPLETIONS: &str = r#"#compdef cuser claude-user
 _cuser() {
     local -a commands
     commands=(
+        'add:Create a new profile and log into an account'
+        'new:Alias for add'
         'switch:Switch active profile without launching'
         'run:Launch isolated session mode'
         'list:List existing profiles with quota'
@@ -116,7 +118,7 @@ const BASH_COMPLETIONS: &str = r#"_cuser() {
         cword=$COMP_CWORD
     }
 
-    local commands="switch run list usage auto alias unalias config add-token export import import-usage current status map unmap disable enable sync remove rename purge doctor watch prompt completions --help --version --update --json --refresh --token-status --fix --short --full"
+    local commands="add new switch run list usage auto alias unalias config add-token export import import-usage current status map unmap disable enable sync remove rename purge doctor watch prompt completions --help --version --update --json --refresh --token-status --fix --short --full"
     
     local profiles=""
     local root="${CLAUDE_PROFILES_DIR:-$HOME/.claude-profiles}"
@@ -171,6 +173,8 @@ const FISH_COMPLETIONS: &str = r#"function __cuser_profiles
     end
 end
 
+complete -c cuser -n "__fish_use_subcommand" -a add -d "Create a new profile and log into an account"
+complete -c cuser -n "__fish_use_subcommand" -a new -d "Alias for add"
 complete -c cuser -n "__fish_use_subcommand" -a switch -d "Switch active profile without launching"
 complete -c cuser -n "__fish_use_subcommand" -a run -d "Launch isolated session mode"
 complete -c cuser -n "__fish_use_subcommand" -a list -d "List profiles with usage limits"
@@ -211,6 +215,8 @@ const PWSH_COMPLETIONS: &str = r#"Register-ArgumentCompleter -Native -CommandNam
     param($wordToComplete, $commandAst, $cursorPosition)
 
     $subcommands = @(
+        [Management.Automation.CompletionResult]::new('add', 'add', 'ParameterValue', 'Create a new profile and log into an account'),
+        [Management.Automation.CompletionResult]::new('new', 'new', 'ParameterValue', 'Alias for add'),
         [Management.Automation.CompletionResult]::new('switch', 'switch', 'ParameterValue', 'Switch active profile without launching'),
         [Management.Automation.CompletionResult]::new('run', 'run', 'ParameterValue', 'Launch isolated session mode'),
         [Management.Automation.CompletionResult]::new('list', 'list', 'ParameterValue', 'List existing profiles with quota'),

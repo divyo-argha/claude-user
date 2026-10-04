@@ -18,8 +18,8 @@ use crate::profiles;
 
 type CuserTerminal = Terminal<CrosstermBackend<Stdout>>;
 
-const NEW_PROFILE: &str = "+ New profile";
-const IMPORT_DEFAULT: &str = "+ Import ~/.claude";
+const NEW_PROFILE: &str = "+ Add new account / profile (press 'n')";
+const IMPORT_DEFAULT: &str = "+ Import ~/.claude account (press 'i')";
 
 pub enum PickResult {
     Existing(String),
@@ -184,15 +184,55 @@ fn event_loop(
         match &mut mode {
             Mode::Picking => match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => return Ok(None),
-                KeyCode::Up | KeyCode::Char('k') => {
-                    let i = list_state.selected().unwrap_or(0);
-                    list_state.select(Some(i.saturating_sub(1)));
+                KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('+') => {
+                    mode = Mode::Naming {
+                        action: Action::New,
+                        buffer: String::new(),
+                    };
+                    status = None;
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                KeyCode::Char('i') | KeyCode::Char('I') => {
+                    if profiles::can_import().unwrap_or(false) {
+                        mode = Mode::Naming {
+                            action: Action::Import,
+                            buffer: String::new(),
+                        };
+                        status = None;
+                    } else {
+                        status = Some(StatusMessage::Info(
+                            "No default ~/.claude directory available to import.".to_string(),
+                        ));
+                    }
+                }
+                KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+                    let i = list_state.selected().unwrap_or(0);
+                    if i == 0 {
+                        list_state.select(Some(items.len().saturating_sub(1)));
+                    } else {
+                        list_state.select(Some(i - 1));
+                    }
+                }
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
                     let i = list_state.selected().unwrap_or(0);
                     if i + 1 < items.len() {
                         list_state.select(Some(i + 1));
+                    } else {
+                        list_state.select(Some(0));
                     }
+                }
+                KeyCode::Home => {
+                    list_state.select(Some(0));
+                }
+                KeyCode::End => {
+                    list_state.select(Some(items.len().saturating_sub(1)));
+                }
+                KeyCode::PageUp => {
+                    let i = list_state.selected().unwrap_or(0);
+                    list_state.select(Some(i.saturating_sub(5)));
+                }
+                KeyCode::PageDown => {
+                    let i = list_state.selected().unwrap_or(0);
+                    list_state.select(Some((i + 5).min(items.len().saturating_sub(1))));
                 }
                 KeyCode::Char('s') => {
                     if let Some(name) = selected_profile_name(&items, &list_state) {
@@ -481,20 +521,23 @@ fn draw(
 
     let keybindings_info = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled(" ↑/↓ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::styled(" ↑/↓/Tab ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Navigate  |  "),
+            Span::styled(" n/+ ", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)),
+            Span::styled("Add Account", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)),
+            Span::raw("  |  "),
             Span::styled(" Enter ↵ ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Launch  |  "),
             Span::styled(" s ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Switch Active  |  "),
             Span::styled(" a ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-            Span::raw("Set Alias  |  "),
-            Span::styled(" m ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-            Span::raw("Map CWD"),
+            Span::raw("Set Alias"),
         ]),
         Line::from(vec![
+            Span::styled(" m ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
+            Span::raw("Map CWD  |  "),
             Span::styled(" e ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-            Span::raw("Toggle Disabled  |  "),
+            Span::raw("Disable  |  "),
             Span::styled(" r ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
             Span::raw("Rename  |  "),
             Span::styled(" d ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
@@ -568,23 +611,23 @@ fn draw(
                 }
                 Item::ImportDefault => {
                     let style = if is_selected {
-                        Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
+                        Style::default().fg(Color::Rgb(250, 204, 21)).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(Color::Rgb(253, 224, 71))
                     };
                     ListItem::new(Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(logo_color_1)),
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(250, 204, 21))),
                         Span::styled(IMPORT_DEFAULT, style),
                     ]))
                 }
                 Item::NewProfile => {
                     let style = if is_selected {
-                        Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)
+                        Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(Color::Rgb(134, 239, 172))
                     };
                     ListItem::new(Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(logo_color_1)),
+                        Span::styled(prefix, Style::default().fg(Color::Rgb(74, 222, 128))),
                         Span::styled(NEW_PROFILE, style),
                     ]))
                 }
@@ -612,49 +655,60 @@ fn draw(
                 Some(StatusMessage::Error(e)) => vec![Span::styled(format!("Error: {e}"), Style::default().fg(Color::Red))],
                 Some(StatusMessage::Info(msg)) => vec![Span::styled(msg.clone(), Style::default().fg(Color::Green))],
                 None => {
-                    if let Some(Item::Profile { usage: Some(u), .. }) = items.get(state.selected().unwrap_or(0)) {
-                        match u.status {
-                            crate::usage::UsageStatus::Ok => {
-                                let mut spans = vec![Span::styled("Quota: ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD))];
-                                if let Some(h5) = &u.five_hour {
-                                    spans.push(Span::styled("5h Limit ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                                    spans.extend(crate::usage::render_tui_progress_spans(h5.pct, 12));
-                                    if let Some(rst) = &h5.countdown {
-                                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                    match items.get(state.selected().unwrap_or(0)) {
+                        Some(Item::NewProfile) => vec![
+                            Span::styled("✨ Add Account: ", Style::default().fg(Color::Rgb(74, 222, 128)).add_modifier(Modifier::BOLD)),
+                            Span::styled("Press Enter (or 'n') to create a new profile and log into your Anthropic account in browser.", Style::default().fg(Color::White)),
+                        ],
+                        Some(Item::ImportDefault) => vec![
+                            Span::styled("📥 Import Account: ", Style::default().fg(Color::Rgb(250, 204, 21)).add_modifier(Modifier::BOLD)),
+                            Span::styled("Press Enter (or 'i') to import existing ~/.claude login into a new profile.", Style::default().fg(Color::White)),
+                        ],
+                        Some(Item::Profile { usage: Some(u), .. }) => {
+                            match u.status {
+                                crate::usage::UsageStatus::Ok => {
+                                    let mut spans = vec![Span::styled("Quota: ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD))];
+                                    if let Some(h5) = &u.five_hour {
+                                        spans.push(Span::styled("5h Limit ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                                        spans.extend(crate::usage::render_tui_progress_spans(h5.pct, 12));
+                                        if let Some(rst) = &h5.countdown {
+                                            spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                                        }
                                     }
+                                    if let Some(d7) = &u.seven_day {
+                                        if u.five_hour.is_some() {
+                                            spans.push(Span::styled("   •   ", Style::default().fg(border_color)));
+                                        }
+                                        spans.push(Span::styled("7d Limit ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+                                        spans.extend(crate::usage::render_tui_progress_spans(d7.pct, 12));
+                                        if let Some(rst) = &d7.countdown {
+                                            spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                                        }
+                                    }
+                                    spans
                                 }
-                                if let Some(d7) = &u.seven_day {
-                                    if u.five_hour.is_some() {
-                                        spans.push(Span::styled("   •   ", Style::default().fg(border_color)));
-                                    }
-                                    spans.push(Span::styled("7d Limit ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                                    spans.extend(crate::usage::render_tui_progress_spans(d7.pct, 12));
-                                    if let Some(rst) = &d7.countdown {
-                                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
-                                    }
+                                crate::usage::UsageStatus::TokenExpired => {
+                                    vec![Span::styled("Quota: OAuth token expired (select & launch to re-authenticate)", Style::default().fg(Color::Yellow))]
                                 }
-                                spans
-                            }
-                            crate::usage::UsageStatus::TokenExpired => {
-                                vec![Span::styled("Quota: OAuth token expired (select & launch to re-authenticate)", Style::default().fg(Color::Yellow))]
-                            }
-                            crate::usage::UsageStatus::RateLimited => {
-                                vec![Span::styled("Quota: Rate-limited on Anthropic usage endpoint (429)", Style::default().fg(Color::Yellow))]
-                            }
-                            crate::usage::UsageStatus::NoUsageAccess => {
-                                vec![Span::styled("Quota: Account tier does not report OAuth usage quota", Style::default().fg(Color::DarkGray))]
-                            }
-                            crate::usage::UsageStatus::Unavailable => {
-                                match current_profile {
-                                    Some(curr) => vec![Span::raw(format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""))],
-                                    None => vec![Span::raw("Select a profile and press Enter.")],
+                                crate::usage::UsageStatus::RateLimited => {
+                                    vec![Span::styled("Quota: Rate-limited on Anthropic usage endpoint (429)", Style::default().fg(Color::Yellow))]
+                                }
+                                crate::usage::UsageStatus::NoUsageAccess => {
+                                    vec![Span::styled("Quota: Account tier does not report OAuth usage quota", Style::default().fg(Color::DarkGray))]
+                                }
+                                crate::usage::UsageStatus::Unavailable => {
+                                    match current_profile {
+                                        Some(curr) => vec![Span::raw(format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""))],
+                                        None => vec![Span::raw("Select a profile and press Enter.")],
+                                    }
                                 }
                             }
                         }
-                    } else {
-                        match current_profile {
-                            Some(curr) => vec![Span::raw(format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""))],
-                            None => vec![Span::raw("Select a profile and press Enter.")],
+                        _ => {
+                            match current_profile {
+                                Some(curr) => vec![Span::raw(format!("Select profile & press Enter. Running `claude` uses: \"{curr}\""))],
+                                None => vec![Span::raw("Select a profile and press Enter.")],
+                            }
                         }
                     }
                 }
@@ -662,9 +716,10 @@ fn draw(
         }
         Mode::Naming { action, buffer } => {
             let label = match action {
-                Action::Rename { .. } => "New name",
+                Action::New => "New Account / Profile Name",
+                Action::Import => "Profile Name for Imported Account",
+                Action::Rename { .. } => "New Name",
                 Action::Alias { .. } => "Alias (blank to unset)",
-                _ => "Name",
             };
             match status {
                 Some(StatusMessage::Error(e)) => vec![Span::styled(format!("{label}: {buffer}_   ({e})"), Style::default().fg(Color::Red))],
