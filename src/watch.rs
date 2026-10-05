@@ -36,6 +36,8 @@ pub fn run_watch(interval_secs: u64) -> Result<()> {
 struct WatchItem {
     name: String,
     alias: Option<String>,
+    email: Option<String>,
+    org_name: Option<String>,
     is_current: bool,
     is_disabled: bool,
     usage: Option<AccountUsage>,
@@ -51,11 +53,16 @@ fn fetch_watch_items(force: bool) -> Result<Vec<WatchItem>> {
         let is_disabled = profiles::is_profile_disabled(&name).unwrap_or(false);
         let my_aliases = aliases::aliases_for_profile(&name).unwrap_or_default();
         let alias = my_aliases.first().cloned();
+        let info = profiles::get_profile_info(&name).ok();
+        let email = info.as_ref().and_then(|i| i.email.clone());
+        let org_name = info.as_ref().and_then(|i| i.org_name.clone());
         let usage = usage::get_profile_usage(&name, force).ok();
 
         items.push(WatchItem {
             name,
             alias,
+            email,
+            org_name,
             is_current,
             is_disabled,
             usage,
@@ -159,8 +166,8 @@ fn draw_watch(
 
     // Top Header
     let header = Paragraph::new(Line::from(vec![
-        Span::styled(" LIVE QUOTA MONITOR ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-        Span::raw(format!("(polling every {interval_secs}s)  |  ")),
+        Span::styled("watching all accounts", Style::default().fg(Color::Rgb(203, 213, 225)).add_modifier(Modifier::BOLD)),
+        Span::raw(format!("  (polling every {interval_secs}s)  |  ")),
         Span::styled("↑/↓", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
         Span::raw(" Select  |  "),
         Span::styled("s", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
@@ -178,70 +185,95 @@ fn draw_watch(
     f.render_widget(header, chunks[0]);
 
     // Profile list items
+    let bar_width = (chunks[1].width as usize).saturating_sub(34).clamp(16, 36);
+
     let list_items: Vec<ListItem> = items
         .iter()
         .enumerate()
         .map(|(idx, it)| {
             let is_selected = state.selected() == Some(idx);
-            let prefix = if is_selected { " ▶ " } else { "   " };
+            let prefix = if is_selected { "▶ " } else { "  " };
 
-            let name_style = if it.is_current {
-                Style::default().fg(active_color).add_modifier(Modifier::BOLD)
-            } else if it.is_disabled {
-                Style::default().fg(Color::DarkGray)
-            } else {
-                Style::default().fg(Color::White)
+            let org_suffix = it.org_name.as_deref().map(|o| format!("  ({o})")).unwrap_or_default();
+            let display_name = match (&it.email, &it.alias) {
+                (Some(e), Some(a)) => format!("{prefix}{}  {e}  [{a}]{org_suffix}", idx + 1),
+                (Some(e), None) => format!("{prefix}{}  {e}{org_suffix}", idx + 1),
+                (None, Some(a)) => format!("{prefix}{}  {}  [{a}]{org_suffix}", idx + 1, it.name),
+                (None, None) => format!("{prefix}{}  {}{org_suffix}", idx + 1, it.name),
             };
 
-            let alias_part = it
-                .alias
-                .as_ref()
-                .map(|a| format!("  (@{a})"))
-                .unwrap_or_default();
+            let head_style = if is_selected {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Rgb(226, 232, 240))
+            };
 
-            let mut spans = vec![
-                Span::styled(prefix, Style::default().fg(logo_color_1)),
-                Span::styled(format!("{:<16}", it.name), name_style),
-                Span::styled(format!("{:<10}", alias_part), Style::default().fg(Color::Yellow)),
+            let mut lines = Vec::new();
+            let mut head_spans = vec![
+                Span::styled(display_name, head_style),
             ];
 
             if it.is_current {
-                spans.push(Span::styled(" ● active ", Style::default().fg(active_color).add_modifier(Modifier::BOLD)));
-            } else {
-                spans.push(Span::raw("          "));
+                head_spans.push(Span::styled("   ● active", Style::default().fg(active_color).add_modifier(Modifier::BOLD)));
             }
+            if it.is_disabled {
+                head_spans.push(Span::styled("   (disabled)", Style::default().fg(Color::DarkGray)));
+            }
+            lines.push(Line::from(head_spans));
 
             match &it.usage {
                 Some(u) if u.status == UsageStatus::Ok => {
                     if let Some(h5) = &u.five_hour {
-                        spans.push(Span::styled(" 5h ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                        spans.extend(usage::render_tui_progress_spans(h5.pct, 10));
-                        let rst = h5.countdown.as_deref().unwrap_or("?");
-                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                        let mut b_spans = vec![
+                            Span::styled("     5h     ", Style::default().fg(Color::Rgb(156, 163, 175))),
+                        ];
+                        b_spans.extend(usage::render_sleek_progress_spans(h5.pct, bar_width));
+                        if let Some(rst) = &h5.countdown {
+                            b_spans.push(Span::styled(format!("  resets {rst}"), Style::default().fg(Color::Rgb(156, 163, 175))));
+                        }
+                        lines.push(Line::from(b_spans));
                     }
                     if let Some(d7) = &u.seven_day {
-                        spans.push(Span::styled("   7d ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
-                        spans.extend(usage::render_tui_progress_spans(d7.pct, 10));
-                        let rst = d7.countdown.as_deref().unwrap_or("?");
-                        spans.push(Span::styled(format!(" ({rst})"), Style::default().fg(Color::Rgb(56, 189, 248))));
+                        let mut b_spans = vec![
+                            Span::styled("     7d     ", Style::default().fg(Color::Rgb(156, 163, 175))),
+                        ];
+                        b_spans.extend(usage::render_sleek_progress_spans(d7.pct, bar_width));
+                        if let Some(rst) = &d7.countdown {
+                            b_spans.push(Span::styled(format!("  resets {rst}"), Style::default().fg(Color::Rgb(156, 163, 175))));
+                        }
+                        lines.push(Line::from(b_spans));
+                    }
+                    for m in &u.models {
+                        let label = format!("     {:<7}", m.name);
+                        let mut m_spans = vec![
+                            Span::styled(label, Style::default().fg(Color::Rgb(156, 163, 175))),
+                        ];
+                        m_spans.extend(usage::render_sleek_progress_spans(m.pct, bar_width));
+                        if let Some(rst) = &m.countdown {
+                            m_spans.push(Span::styled(format!("  resets {rst}"), Style::default().fg(Color::Rgb(156, 163, 175))));
+                        }
+                        lines.push(Line::from(m_spans));
                     }
                 }
                 Some(u) if u.status == UsageStatus::RateLimited => {
-                    spans.push(Span::styled(" [Rate-Limited 429]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+                    lines.push(Line::from(vec![
+                        Span::styled("     ⚠ Rate-Limited (HTTP 429) - retrying on next window", Style::default().fg(Color::Yellow)),
+                    ]));
                 }
                 Some(u) if u.status == UsageStatus::TokenExpired => {
-                    spans.push(Span::styled(" [OAuth Token Expired]", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)));
+                    lines.push(Line::from(vec![
+                        Span::styled("     ✖ OAuth Token Expired - launch `cuser` to renew login", Style::default().fg(Color::Red)),
+                    ]));
                 }
                 _ => {
-                    spans.push(Span::styled(" [Usage Unavailable]", Style::default().fg(Color::DarkGray)));
+                    lines.push(Line::from(vec![
+                        Span::styled("     ℹ No cached usage data available", Style::default().fg(Color::DarkGray)),
+                    ]));
                 }
             }
 
-            if it.is_disabled {
-                spans.push(Span::styled("  (disabled)", Style::default().fg(Color::DarkGray)));
-            }
-
-            ListItem::new(Line::from(spans))
+            lines.push(Line::raw(""));
+            ListItem::new(lines)
         })
         .collect();
 
