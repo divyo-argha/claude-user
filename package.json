@@ -1,6 +1,6 @@
 {
   "name": "claude-user",
-  "version": "0.3.0",
+  "version": "5.1.0",
   "description": "Switch between multiple Claude Code accounts with an interactive picker — isolated config, credentials, and settings per profile.",
   "keywords": [
     "claude",
@@ -37,9 +37,9 @@
     "darwin"
   ],
   "optionalDependencies": {
-    "claude-user-linux-x64": "0.3.0",
-    "claude-user-linux-arm64": "0.3.0",
-    "claude-user-darwin-x64": "0.3.0",
-    "claude-user-darwin-arm64": "0.3.0"
+    "claude-user-linux-x64": "5.1.0",
+    "claude-user-linux-arm64": "5.1.0",
+    "claude-user-darwin-x64": "5.1.0",
+    "claude-user-darwin-arm64": "5.1.0"
   }
 }

@@ -941,7 +941,7 @@ fn draw(f: &mut Frame, state: &mut ListState, ctx: &DrawContext) {
         let meta_lines = vec![
             Line::from(vec![
                 Span::styled("✦ CLAUDE-USER ", Style::default().fg(logo_color_1).add_modifier(Modifier::BOLD)),
-                Span::styled("v0.3.0", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(concat!("v", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                 Span::styled("  ─  Multi-Account & Quota Manager", Style::default().fg(Color::Rgb(148, 163, 184))),
             ]),
             Line::from(vec![
