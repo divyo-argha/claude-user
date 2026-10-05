@@ -181,7 +181,7 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 | `cuser import [name]` | `cuser migrate [name]` | Import current `~/.claude` credentials as a profile | `cuser import work` |
 | `cuser list [--json]` | `cuser -l` | List all profiles with linked email/org, 5h/7d quota bars, and countdowns | `cuser list --refresh` |
 | `cuser list --token-status` | | List profiles with credential storage diagnostics and token expiry | `cuser list --token-status` |
-| `cuser current [--json]` | `cuser status`, `active` | Show current active profile and live quota status | `cuser current --json` |
+| `cuser current [--json]` | `cuser status`, `active`, `whoami` | Show current active profile and live quota status | `cuser whoami` |
 | `cuser disable <profile>` | | Mark profile as disabled (excluded from rotation) | `cuser disable client-temp` |
 | `cuser enable <profile>` | | Re-enable a disabled profile | `cuser enable client-temp` |
 | `cuser rename <old> <new>` | | Rename an existing profile (auto-updates directory mappings & aliases) | `cuser rename main work` |
@@ -198,36 +198,48 @@ You can invoke `claude-user` using the full command or the short alias `cuser` (
 
 ---
 
-## 🖥️ Interactive TUI
+## 🖥️ Interactive TUI Master-Detail Dashboard
 
-If you run `cuser` with no arguments, it opens the interactive Terminal User Interface:
+Running `cuser` with no arguments opens the dual-panel interactive Terminal User Interface:
 
 ```
-┌ KEYBINDINGS ─────────────────────────────────────────────────────────────┐
-│ ↑/↓ Navigate  | Enter ↵ Launch  | s Switch Active  | a Set Alias  | m Map CWD│
-│ e Disable/Enable  | r Rename  | d Delete  | u Refresh Quota  | q Quit    │
-├──────────────────────────────────────────────────────────────────────────┤
-│ PROFILES (active: work)                                                  │
-│ ▶ work        (@dev • you@company.com • Acme) [5h: 12% | 7d: 34%] ● current│
-│   personal    (you@gmail.com)  [5h: 65% | 7d: 80%]                       │
-│   client-temp (client@org.com)  [disabled]                               │
-│   + Import ~/.claude                                                     │
-│   + New profile                                                          │
-├──────────────────────────────────────────────────────────────────────────┤
-│ STATUS: Quota: 5h: [██░░░░░░░░░░] (2h 15m)  |  7d: [█████░░░░░░] (1d 4h) │
-└──────────────────────────────────────────────────────────────────────────┘
+░█▀▀░█░░░█▀█░█░█░█▀▄░█▀▀  ░█░█░█▀▀░█▀▀░█▀▄
+░█░░░█░░░█▀█░█░█░█░█░█▀▀  ░█░█░▀▀█░█▀▀░█▀▄
+░▀▀▀░▀▀▀░▀░▀░▀▀▀░▀▀░░▀▀▀  ░▀▀▀░▀▀▀░▀▀▀░▀░▀
+  Active: fugitive_stranger (1/2 profiles)  •  Sort: default  •  ? for shortcuts
+
+┌ PROFILES (2) ─────────────────────────┐┌ ACCOUNT DETAILS & QUOTA ────────────────┐
+│ ▶ fugitive_stranger   [5h: 12% | 7d: 34%] ││ Profile: fugitive_stranger                  │
+│   work_client         [5h: 88% | 7d: 91%] ││ Email:   strangerfugitive@gmail.com         │
+│   + Add new account / profile (press 'n') ││ Org:     Engineering Workspace              │
+│   + Import ~/.claude account (press 'i')  ││ Aliases: dev, fs                            │
+│                                           ││ Status:  ● Active (Symlink to ~/.claude)    │
+│                                           ││                                             │
+│                                           ││ 5-Hour Quota (resets in 2h 45m)             │
+│                                           ││ ━━━━━───────────────────────   18%           │
+│                                           ││                                             │
+│                                           ││ 7-Day Quota (resets in 4d 12h)              │
+│                                           ││ ━━━━━━━━━━━━━━━━━━━━━━━━────   85%           │
+│                                           ││ 🌱 On track • 0.8%/h burn • ✔ Lasts to reset│
+└───────────────────────────────────────────┘└─────────────────────────────────────────────┘
+  Enter: Launch  |  s: Switch  |  /: Search  |  o: Sort  |  t: Import Token  |  ?: Help
 ```
 
-### Keyboard Navigation & Hotkeys
+### Keyboard Shortcuts & Cheatsheet
 * <kbd>↑</kbd> or <kbd>k</kbd> / <kbd>↓</kbd> or <kbd>j</kbd>: Navigate through profiles
 * <kbd>Enter ↵</kbd>: Select and launch the profile with Claude Code
+* <kbd>x</kbd>: Launch in isolated session mode (concurrent multi-account support)
 * <kbd>s</kbd>: Switch active profile symlink immediately without launching Claude
+* <kbd>/</kbd>: Instant fuzzy filter & search accounts by name, alias, email, or org
+* <kbd>o</kbd>: Cycle sorting order (`default` → `quota` [most available] → `name` [alphabetical])
+* <kbd>t</kbd>: Ingest OAuth setup token or API key directly in-TUI
 * <kbd>a</kbd>: Set or edit short alias for the highlighted profile
 * <kbd>m</kbd>: Map or unmap current working directory to the highlighted profile
 * <kbd>u</kbd>: Force refresh live quota and rate limit status from Anthropic API
 * <kbd>e</kbd>: Toggle disabling / enabling the highlighted profile
 * <kbd>r</kbd>: Rename the highlighted profile
 * <kbd>d</kbd>: Delete the highlighted profile (asks for confirmation)
+* <kbd>?</kbd>: Open interactive help modal & keyboard shortcuts cheatsheet
 * <kbd>q</kbd> or <kbd>Esc</kbd>: Exit the picker
 
 ---

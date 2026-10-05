@@ -45,7 +45,7 @@ USAGE:
     claude-user export [file]      export profiles and credentials to a backup JSON
     claude-user import [file|name] import backup file or import ~/.claude as profile
     claude-user import-usage <f>   import usage snapshot readings from another machine
-    claude-user current            show the profile currently pointed to by `claude`
+    claude-user current | whoami   show the profile currently pointed to by `claude`
     claude-user map [profile] [dir] bind a directory to a profile (or list mappings)
     claude-user unmap [dir]        remove a directory mapping
     claude-user add <profile>      create a new profile and log into an account (alias: new)
@@ -143,7 +143,7 @@ pub fn run() -> Result<()> {
                 .collect();
             cmd_usage(&filtered, is_json, force_refresh)
         }
-        "current" | "active" | "status" => cmd_current(is_json, force_refresh),
+        "current" | "active" | "status" | "whoami" => cmd_current(is_json, force_refresh),
         "switch" => switch::run_switch(&args[1..]),
         "alias" => {
             let filtered: Vec<String> = args

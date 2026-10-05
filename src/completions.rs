@@ -45,6 +45,7 @@ _cuser() {
         'import-usage:Import usage snapshot readings from another machine'
         'current:Show the active profile'
         'status:Show the active profile'
+        'whoami:Show current active profile and account'
         'map:Bind a directory to a profile'
         'unmap:Remove a directory mapping'
         'disable:Hold a profile out of rotation'
@@ -118,7 +119,7 @@ const BASH_COMPLETIONS: &str = r#"_cuser() {
         cword=$COMP_CWORD
     }
 
-    local commands="add new switch run list usage auto alias unalias config add-token export import import-usage current status map unmap disable enable sync remove rename purge doctor watch prompt completions --help --version --update --json --refresh --token-status --fix --short --full"
+    local commands="add new switch run list usage auto alias unalias config add-token export import import-usage current status whoami map unmap disable enable sync remove rename purge doctor watch prompt completions --help --version --update --json --refresh --token-status --fix --short --full"
     
     local profiles=""
     local root="${CLAUDE_PROFILES_DIR:-$HOME/.claude-profiles}"
@@ -189,6 +190,7 @@ complete -c cuser -n "__fish_use_subcommand" -a import -d "Import backup file or
 complete -c cuser -n "__fish_use_subcommand" -a import-usage -d "Import usage snapshot readings"
 complete -c cuser -n "__fish_use_subcommand" -a current -d "Show the active profile"
 complete -c cuser -n "__fish_use_subcommand" -a status -d "Show the active profile"
+complete -c cuser -n "__fish_use_subcommand" -a whoami -d "Show the active profile"
 complete -c cuser -n "__fish_use_subcommand" -a map -d "Bind a directory to a profile"
 complete -c cuser -n "__fish_use_subcommand" -a unmap -d "Remove a directory mapping"
 complete -c cuser -n "__fish_use_subcommand" -a disable -d "Hold a profile out of rotation"
